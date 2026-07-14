@@ -165,6 +165,10 @@
       <code>u128</code> holding 15 payload bytes. Reassembling those 15-byte chunks and reading the first
       integer gives the protocol id — <code>1</code> is Alkanes. Runes indexers ignore that odd tag, so the
       message is invisible to them but decodable here.</li>
+    <li><strong>OP_NET</strong> — <code>OP_RETURN OP_8</code> (<code>6a 58</code>) is the marker for
+      <a href="https://opnet.org/" target="_blank" rel="noopener">OP_NET</a>, a smart-contract metaprotocol whose
+      epoch-mining participants submit SHA-1 proof-of-work solutions on-chain. The payload carries the solver's
+      account key and the solution preimage.</li>
     <li><strong>plain data</strong> — any other <code>OP_RETURN</code> (timestamps, protocol messages, raw bytes).</li>
   </ul>
   <p>The block faces show per-block counts (<code>⚗ Alkanes</code>, <code>ᚱ Runes</code>) and the detail panel
