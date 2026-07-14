@@ -105,21 +105,33 @@ function identifyPool(tag) {
   return null;
 }
 
+// Fetch with a hard timeout so a throttled/hung source aborts and fails over
+// to the next one — a stuck fetch must never wedge a pool worker forever.
+async function fetchWithTimeout(url, ms) {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), ms);
+  try { return await fetch(url, { signal: ctrl.signal }); }
+  finally { clearTimeout(t); }
+}
+
 async function fetchRawHex(hash) {
   const sources = [
     `https://mempool.space/api/block/${hash}/raw`,
     `https://blockstream.info/api/block/${hash}/raw`,
   ];
   let lastErr;
-  for (const url of sources) {
-    try {
-      const r = await fetch(url);
-      if (!r.ok) { lastErr = new Error(`${url} -> ${r.status}`); continue; }
-      const buf = new Uint8Array(await r.arrayBuffer());
-      let hex = '';
-      for (let i = 0; i < buf.length; i++) hex += buf[i].toString(16).padStart(2, '0');
-      return hex;
-    } catch (e) { lastErr = e; }
+  // two passes: give each source a turn, then retry the list once
+  for (let attempt = 0; attempt < 2; attempt++) {
+    for (const url of sources) {
+      try {
+        const r = await fetchWithTimeout(url, 15000);
+        if (!r.ok) { lastErr = new Error(`${url} -> ${r.status}`); continue; }
+        const buf = new Uint8Array(await r.arrayBuffer());
+        let hex = '';
+        for (let i = 0; i < buf.length; i++) hex += buf[i].toString(16).padStart(2, '0');
+        return hex;
+      } catch (e) { lastErr = e; }
+    }
   }
   throw lastErr || new Error('no block source');
 }

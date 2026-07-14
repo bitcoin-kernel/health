@@ -253,22 +253,31 @@ const jl = (n) => fetch(`./engine/schema/${n}.jsonld`).then((r) => r.json());
 const [core, proof, p2p] = await Promise.all([jl('core'), jl('proof'), jl('p2p')]);
 const codec = new Codec(core, proof, p2p);
 
-// ---- validation worker ----
-const worker = new Worker('./validator-worker.js', { type: 'module' });
-let workerReady = false;
-const workerQueue = [];
-worker.postMessage({ type: 'init', network: 'btc:mainnet' });
-worker.onmessage = (ev) => {
-  const m = ev.data;
-  if (m.type === 'ready') { workerReady = true; drainQueue(); return; }
-  if (m.type === 'result') onValidated(m.hash, m.result);
-  if (m.type === 'error') onValidateError(m.hash, m.error);
-};
-function requestValidate(hash, height) {
-  if (!workerReady) { workerQueue.push({ hash, height }); return; }
-  worker.postMessage({ type: 'validate', hash, height });
+// ---- validation worker POOL (entirely off the critical path) ----
+// Tiles paint from the headers alone; full-block download + consensus
+// validation + OP_RETURN health is a background enhancement that streams in.
+// A small pool means several blocks decode in parallel (newest first), so the
+// visible faces fill in seconds instead of one-at-a-time over a serial worker.
+const NUM_WORKERS = 3;
+const idleWorkers = [];
+const jobQueue = [];
+for (let i = 0; i < NUM_WORKERS; i++) {
+  const w = new Worker('./validator-worker.js', { type: 'module' });
+  w.postMessage({ type: 'init', network: 'btc:mainnet' });
+  w.onmessage = (ev) => {
+    const m = ev.data;
+    if (m.type === 'ready') { idleWorkers.push(w); pump(); return; }
+    if (m.type === 'result') onValidated(m.hash, m.result);
+    else if (m.type === 'error') onValidateError(m.hash, m.error);
+    idleWorkers.push(w); pump(); // job done — worker is free for the next
+  };
 }
-function drainQueue() { while (workerQueue.length) { const j = workerQueue.shift(); worker.postMessage({ type: 'validate', ...j }); } }
+function requestValidate(hash, height) { jobQueue.push({ hash, height }); pump(); }
+function pump() {
+  while (idleWorkers.length && jobQueue.length) {
+    idleWorkers.shift().postMessage({ type: 'validate', ...jobQueue.shift() });
+  }
+}
 
 // ---- state ----
 const blocks = new Map();  // hash -> { height, header, hex, el, state, result }
@@ -292,14 +301,14 @@ function fetchFromRelay(url) {
   });
 }
 
+// Fire every relay independently and ingest each valid event the moment it
+// lands — first responder paints the row; a slower relay carrying a newer tip
+// upgrades it. No waiting on the slowest relay before the first paint.
 async function poll() {
-  let events;
-  try {
-    events = (await Promise.all(RELAYS.map(fetchFromRelay))).filter(Boolean).filter(verifyNostrEvent);
-  } catch { events = []; }
-  if (!events.length) { if (!tipHeight) setStatus('no valid event on any relay', 'err'); return; }
-  const event = events.reduce((a, b) => (b.created_at > a.created_at ? b : a));
-  ingest(event);
+  const settled = await Promise.allSettled(RELAYS.map((url) =>
+    fetchFromRelay(url).then((ev) => { if (ev && verifyNostrEvent(ev)) ingest(ev); })));
+  if (tipHeight == null) setStatus('no valid event on any relay', 'err');
+  return settled;
 }
 
 function ingest(event) {
@@ -530,7 +539,7 @@ function renderDetail(rec) {
 
 // ---- go ----
 setStatus('fetching NIP-333 event…');
-await poll();
+poll();
 setInterval(poll, POLL_MS);
 </script>
 </body>
