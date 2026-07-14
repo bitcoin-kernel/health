@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>about — block·health</title>
+<meta name="description" content="How block·health delivers and validates Bitcoin blocks over NIP-333, and how it scores OP_RETURN datacarrier health.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='5' fill='%2311131f'/%3E%3Cpath d='M8 13l8-4 8 4-8 4z' fill='%23f7931a'/%3E%3Cpath d='M8 13v8l8 4v-8z' fill='%23c76f0a'/%3E%3Cpath d='M24 13v8l-8 4v-8z' fill='%239c5606'/%3E%3C/svg%3E">
+<style>
+  :root {
+    --bg: #11131f; --nav-bg: #1d1f31; --panel-bg: #24273e; --stat-box-bg: #0b1018;
+    --border: #2d3348; --fg: #ffffff; --muted: #8b93b0; --link: #00ddff; --accent: #f7931a;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--fg); min-height: 100vh;
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    -webkit-font-smoothing: antialiased; }
+  a { color: var(--link); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  header.nav { display: flex; align-items: center; gap: .4rem; padding: .85rem 1.4rem;
+    background: var(--nav-bg); border-bottom: 1px solid var(--border); }
+  header.nav .brand { font-size: 1.15rem; font-weight: 600; color: var(--fg); }
+  header.nav .brand:hover { text-decoration: none; }
+  header.nav .brand .dot { color: var(--accent); }
+  header.nav .menu { display: flex; gap: .3rem; margin-left: .4rem; }
+  header.nav .menu a { color: var(--muted); font-size: .84rem; padding: .25rem .6rem; border-radius: 6px; }
+  header.nav .menu a:hover { color: var(--fg); background: #ffffff0d; text-decoration: none; }
+  header.nav .menu a.active { color: var(--fg); background: #ffffff14; }
+
+  .wrap { max-width: 760px; margin: 0 auto; padding: 2.4rem 1.4rem 4rem; }
+  h1 { font-size: 1.9rem; margin: 0 0 .4rem; letter-spacing: -.01em; }
+  .tagline { color: var(--muted); font-size: 1.02rem; margin: 0 0 2.4rem; }
+  h2 { font-size: 1.15rem; margin: 2.6rem 0 .7rem; }
+  h2 .n { color: var(--accent); font-variant-numeric: tabular-nums; margin-right: .5rem; }
+  p { line-height: 1.68; color: #dfe3f2; margin: .7rem 0; }
+  li { line-height: 1.6; color: #dfe3f2; margin: .35rem 0; }
+  code { background: var(--stat-box-bg); padding: .12rem .4rem; border-radius: 4px; color: #cfe; font-size: .86em;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .callout { background: var(--panel-bg); border: 1px solid var(--border); border-left: 3px solid var(--accent);
+    border-radius: 8px; padding: 1rem 1.2rem; margin: 1.4rem 0; }
+  .callout p { margin: .3rem 0; }
+  .steps { list-style: none; padding: 0; margin: 1rem 0; counter-reset: s; }
+  .steps > li { position: relative; padding: .1rem 0 1.1rem 2.6rem; }
+  .steps > li:before { counter-increment: s; content: counter(s); position: absolute; left: 0; top: -.1rem;
+    width: 1.8rem; height: 1.8rem; border-radius: 50%; background: var(--stat-box-bg); border: 1px solid var(--border);
+    color: var(--accent); font-weight: 700; font-size: .85rem; display: grid; place-items: center; }
+  .steps > li strong { display: block; margin-bottom: .15rem; }
+  table { width: 100%; border-collapse: collapse; margin: 1rem 0; font-size: .9rem; }
+  th, td { text-align: left; padding: .5rem .6rem; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 500; font-size: .78rem; text-transform: uppercase; letter-spacing: .04em; }
+  td code { font-size: .82em; }
+  footer { color: var(--muted); font-size: .82rem; line-height: 1.6; margin-top: 3rem;
+    border-top: 1px solid var(--border); padding-top: 1.3rem; }
+</style>
+</head>
+<body>
+<header class="nav">
+  <a class="brand" href="./">block<span class="dot">·</span>health</a>
+  <nav class="menu">
+    <a href="./">Blocks</a>
+    <a href="./about.html" class="active">About</a>
+  </nav>
+</header>
+
+<div class="wrap">
+  <h1>What this is</h1>
+  <p class="tagline">A live view of the newest Bitcoin blocks that trusts no server — every block is
+    re-verified against the consensus rules in your own browser, then scored for how much arbitrary
+    data it carries.</p>
+
+  <p>Most block explorers ask you to trust their database. This one doesn't. Block headers are
+    self-certifying — proof-of-work and the hash linking each block to its parent are checkable by
+    anyone — so a header stream needs no trusted host: you verify it on arrival. <code>block·health</code>
+    takes that stream from <a href="https://nip-333.github.io/" target="_blank" rel="noopener">Nostr</a>,
+    re-checks it, fetches the full blocks, re-validates them with a real Bitcoin consensus engine, and
+    reports what it found. If a relay or publisher lies, the checks fail and you see it.</p>
+
+  <h2><span class="n">1</span>Headers arrive over NIP-333</h2>
+  <p><a href="https://nip-333.github.io/" target="_blank" rel="noopener">NIP-333</a> is a small Nostr
+    convention for publishing Bitcoin headers: a parameterized-replaceable event of kind <code>33333</code>
+    whose content is the newest 12 block headers (80 bytes each), concatenated as hex, tip last. The
+    <code>d</code> tag names the network (<code>btc</code> for mainnet). Relays keep only the latest event
+    per publisher, so subscribing gives you a self-updating window on the chain tip.</p>
+  <div class="callout">
+    <p><strong>The publisher is a filter, not an authority.</strong> A NIP-333 key is a brand you choose
+      to follow for convenience — it is never a security boundary. Every consumer re-checks proof-of-work
+      and linkage, so following a dishonest publisher costs you nothing but a failed check. You can follow
+      several and prefer the heaviest verified chain.</p>
+  </div>
+
+  <h2><span class="n">2</span>Everything is re-verified locally</h2>
+  <p>Nothing from the network is taken on faith. The page runs the
+    <a href="https://github.com/bitcoin-kernel" target="_blank" rel="noopener">bitcoin-kernel</a> engine —
+    a schema-driven Bitcoin consensus engine in pure JavaScript — inside a Web Worker:</p>
+  <ol class="steps">
+    <li><strong>Event authenticity</strong> The Nostr event's NIP-01 id hash and BIP-340 signature are
+      checked against the publisher key before anything else is trusted.</li>
+    <li><strong>Header proof-of-work &amp; linkage</strong> Each of the 12 headers is hashed; the hash must
+      meet the target encoded in <code>bits</code>, and each header must point at the previous one's hash.</li>
+    <li><strong>Full-block validation</strong> Each block is fetched raw and decoded, then run through the
+      structure and context rulesets: merkle root, sizes, weight, sigops, coinbase height (BIP34) and the
+      segwit witness commitment.</li>
+  </ol>
+
+  <div class="callout">
+    <p><strong>Why "without prevouts"?</strong> Fully checking that every input spends a real, unspent coin
+      needs the whole UTXO set — gigabytes a browser tab won't hold. So this runs as a <em>pruned window with
+      an empty coin view</em>: value, fee and script-signature rules honestly report <em>unresolved</em>
+      rather than pretending. Everything that <em>can</em> be checked from the block alone — its structure,
+      merkle commitment and witness commitment — is fully checked. It's an honest partial validation, and it
+      says which parts it skipped.</p>
+  </div>
+
+  <h2><span class="n">3</span>Datacarrier health &amp; the 80/83-byte lines</h2>
+  <p>Bitcoin's <code>OP_RETURN</code> outputs let a transaction embed arbitrary data — timestamps, protocol
+    messages, inscriptions, images. For years the default relay policy capped a data output at <strong>80
+    bytes of payload</strong>, which is <strong>83 bytes of scriptPubKey</strong> once you count the
+    <code>OP_RETURN</code> opcode and its push prefix. That limit has since been relaxed, and blocks now
+    routinely carry far larger payloads.</p>
+  <p>For every block, <code>block·health</code> counts the <code>OP_RETURN</code> outputs and flags those
+    over each historical line:</p>
+  <table>
+    <tr><th>threshold</th><th>what it measures</th></tr>
+    <tr><td><code>&gt; 80 B</code></td><td>the pushed data payload exceeds the classic datacarrier data limit</td></tr>
+    <tr><td><code>&gt; 83 B</code></td><td>the whole scriptPubKey exceeds the classic standardness limit</td></tr>
+  </table>
+  <p>A block with no oversize outputs shows <strong>healthy</strong>; one carrying larger data shows
+    <strong>bloated</strong>. The coinbase's own witness-commitment <code>OP_RETURN</code> is protocol
+    overhead, so it's counted separately and never flagged. This isn't a value judgement — it's a lens on
+    how the demand for on-chain data storage is showing up block by block.</p>
+
+  <h2><span class="n">4</span>Who mined it</h2>
+  <p>Mining pools stamp a marker into the block's coinbase transaction — the <code>scriptSig</code> of its
+    single input, which carries no spending role and is free-form. Reading its printable ASCII usually
+    reveals the pool: <code>/Foundry USA Pool/</code>, <code>Mined by AntPool</code>,
+    <code>SpiderPool/</code>. The page matches that tag against a list of known pool markers — the same
+    primary signal mempool.space uses — and shows the raw tag alongside, derived entirely from the block
+    itself with no attribution service in the loop.</p>
+
+  <h2><span class="n">5</span>How it's built</h2>
+  <p>Three static files and a vendored engine — no framework, no build step, no backend. It runs anywhere
+    that serves files: GitHub Pages, a static host, a personal data pod.</p>
+  <ul>
+    <li><code>index.html</code> — the app: Nostr subscription, header checks, UI.</li>
+    <li><code>validator-worker.js</code> — off the main thread: fetch a raw block, decode, validate, measure health, identify the pool.</li>
+    <li><code>engine/</code> — the vendored bitcoin-kernel codec and JSON-LD consensus schemas.</li>
+  </ul>
+  <p>Raw blocks come from the mempool.space / blockstream.info esplora APIs (whichever answers first). Those
+    are dumb byte sources — the bytes are validated on arrival, so a wrong answer is caught, not trusted.</p>
+
+  <footer>
+    Bitcoin headers are self-certifying, so no relay, publisher, or block source is a trusted party — every
+    claim is re-checked on receipt and disagreement is detectable rather than dangerous. Read the
+    <a href="https://nip-333.github.io/" target="_blank" rel="noopener">NIP-333 spec</a> or the
+    <a href="https://github.com/bitcoin-kernel" target="_blank" rel="noopener">bitcoin-kernel</a> engine.
+  </footer>
+</div>
+</body>
+</html>

@@ -1,0 +1,537 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>block health — bitcoin blocks over nostr</title>
+<meta name="description" content="Live Bitcoin blocks over NIP-333, validated in your browser, scored for OP_RETURN datacarrier health.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='5' fill='%2311131f'/%3E%3Cpath d='M8 13l8-4 8 4-8 4z' fill='%23f7931a'/%3E%3Cpath d='M8 13v8l8 4v-8z' fill='%23c76f0a'/%3E%3Cpath d='M24 13v8l-8 4v-8z' fill='%239c5606'/%3E%3C/svg%3E">
+<style>
+  :root {
+    --bg: #11131f;
+    --nav-bg: #1d1f31;
+    --panel-bg: #24273e;
+    --secondary: #272f4e;
+    --block-top: #232838;
+    --block-side: #191c27;
+    --stat-box-bg: #0b1018;
+    --border: #2d3348;
+    --fg: #ffffff;
+    --muted: #8b93b0;
+    --link: #00ddff;
+    --accent: #f7931a;
+    --good: #1a9e4b;
+    --good-glow: #00ff0040;
+    --warn: #e0a80f;
+    --warn-glow: #ffb00040;
+    --bad: #dc3545;
+    --bad-glow: #ff000040;
+    --block-size: 116px;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    min-height: 100vh;
+  }
+  a { color: var(--link); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  header.nav {
+    display: flex; align-items: baseline; gap: .9rem; flex-wrap: wrap;
+    padding: .85rem 1.4rem; background: var(--nav-bg);
+    border-bottom: 1px solid var(--border);
+  }
+  header.nav .brand { font-size: 1.15rem; font-weight: 600; letter-spacing: .01em; color: var(--fg); }
+  header.nav .brand:hover { text-decoration: none; }
+  header.nav .brand .dot { color: var(--accent); }
+  header.nav .menu { display: flex; gap: .3rem; margin-left: .4rem; }
+  header.nav .menu a { color: var(--muted); font-size: .84rem; padding: .25rem .6rem; border-radius: 6px; }
+  header.nav .menu a:hover { color: var(--fg); background: #ffffff0d; text-decoration: none; }
+  header.nav .menu a.active { color: var(--fg); background: #ffffff14; }
+  header.nav .spacer { flex: 1; }
+  header.nav .status { font-size: .78rem; color: var(--muted); display: flex; align-items: center; gap: .45rem; }
+  .pulse { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); display: inline-block; }
+  .pulse.live { background: #2ec07a; box-shadow: 0 0 8px #2ec07a; animation: breathe 2.2s ease-in-out infinite; }
+  .pulse.err { background: var(--bad); box-shadow: 0 0 8px var(--bad); }
+  @keyframes breathe { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
+
+  .wrap { padding: 1.5rem 1.4rem 3rem; max-width: 1400px; margin: 0 auto; }
+  .lede { color: var(--muted); font-size: .9rem; line-height: 1.55; max-width: 62ch; margin: 0 0 1.6rem; }
+  .lede code { background: var(--stat-box-bg); padding: .1rem .35rem; border-radius: 4px; color: #cfe; font-size: .85em; }
+
+  /* summary stat row */
+  .stats { display: flex; gap: .8rem; flex-wrap: wrap; margin-bottom: 2.4rem; }
+  .stat { background: var(--stat-box-bg); border: 1px solid var(--border); border-radius: 8px;
+    padding: .7rem 1rem; min-width: 120px; }
+  .stat .k { font-size: .72rem; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+  .stat .v { font-size: 1.5rem; font-weight: 600; margin-top: .15rem; font-variant-numeric: tabular-nums; }
+  .stat .v.good { color: #46d585; }
+  .stat .v.warn { color: var(--warn); }
+
+  .section-label { font-size: .74rem; text-transform: uppercase; letter-spacing: .09em;
+    color: var(--muted); margin: 0 0 2.6rem; }
+
+  /* isometric block row — geometry lifted from mempool.space's .bitcoin-block */
+  .chain-scroll { overflow-x: auto; overflow-y: visible; padding: 2.6rem .2rem 1rem;
+    scrollbar-width: none; -ms-overflow-style: none;
+    -webkit-mask-image: linear-gradient(to right, transparent, #000 calc(.14 * var(--block-size)), #000 calc(100% - .14 * var(--block-size)), transparent);
+            mask-image: linear-gradient(to right, transparent, #000 calc(.14 * var(--block-size)), #000 calc(100% - .14 * var(--block-size)), transparent); }
+  .chain-scroll::-webkit-scrollbar { display: none; }
+  .chain { display: flex; flex-direction: row; align-items: flex-start;
+    gap: calc(.46 * var(--block-size)); width: max-content;
+    padding: 0 calc(.22 * var(--block-size)); }
+
+  .block-col { display: flex; flex-direction: column; align-items: center; gap: calc(.14 * var(--block-size)); }
+  .block-col .when { font-size: .66rem; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+  .bitcoin-block {
+    --face-a: #2b3352; --face-b: #232b46;
+    width: var(--block-size); height: var(--block-size);
+    position: relative; cursor: pointer; flex: 0 0 auto;
+    background: linear-gradient(155deg, var(--face-a), var(--face-b));
+    transition: transform .25s cubic-bezier(.2,.7,.3,1), box-shadow .25s ease, filter .25s ease;
+    box-shadow: 0 6px 18px #00000055;
+  }
+  .bitcoin-block:after {
+    content: ""; width: var(--block-size); height: calc(.192 * var(--block-size));
+    position: absolute; top: calc(-.192 * var(--block-size)); left: calc(-.16 * var(--block-size));
+    background-color: var(--block-top); transform: skew(40deg); transform-origin: top;
+  }
+  .bitcoin-block:before {
+    content: ""; width: calc(.16 * var(--block-size)); height: var(--block-size);
+    position: absolute; top: calc(-.096 * var(--block-size)); left: calc(-.16 * var(--block-size));
+    background-color: var(--block-side); z-index: -1; transform: skewY(50deg); transform-origin: top;
+  }
+  .bitcoin-block:hover { transform: translateY(-5px); filter: brightness(1.08); }
+  .bitcoin-block.newblock { animation: slidein 1.05s cubic-bezier(.2,.7,.3,1); }
+  @keyframes slidein { from { transform: translateX(calc(-1.7 * var(--block-size))) scale(.96); opacity: 0; } to { transform: none; opacity: 1; } }
+
+  .bitcoin-block.good { --face-a:#20404a; --face-b:#172a30; box-shadow: 0 0 0 1px #1a9e4b55, 0 6px 18px #00000055, 0 0 16px var(--good-glow); }
+  .bitcoin-block.warn { --face-a:#4a3b1f; --face-b:#2c2411; box-shadow: 0 0 0 1px #e0a80f55, 0 6px 18px #00000055, 0 0 18px var(--warn-glow); }
+  .bitcoin-block.bad  { --face-a:#4a2226; --face-b:#2a1215; box-shadow: 0 0 0 1px #dc354566, 0 6px 18px #00000055, 0 0 18px var(--bad-glow); }
+  .bitcoin-block.sel  { transform: translateY(-5px); box-shadow: 0 0 0 2px var(--link), 0 8px 22px #00000066, 0 0 18px #00ddff40; }
+
+  .bitcoin-block .face {
+    position: absolute; inset: 0; padding: calc(.075 * var(--block-size)) calc(.085 * var(--block-size));
+    display: flex; flex-direction: column; z-index: 1; overflow: hidden;
+  }
+  .bitcoin-block .face::before {
+    content: ""; position: absolute; inset: 0; pointer-events: none;
+    background: linear-gradient(180deg, rgba(255,255,255,.12), rgba(255,255,255,0) 42%);
+  }
+  .bitcoin-block .h { font-size: .86rem; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: .01em;
+    text-shadow: 0 1px 2px rgba(0,0,0,.55); position: relative; }
+  .bitcoin-block .bottom { margin-top: auto; display: flex; flex-direction: column; gap: .12rem; position: relative; }
+  .bitcoin-block .fill { height: 5px; border-radius: 3px; background: #0b1018aa; overflow: hidden; display: flex;
+    box-shadow: inset 0 0 0 1px #ffffff12; }
+  .bitcoin-block .fill > i { display: block; height: 100%; }
+  .bitcoin-block .fill > i.clean { background: #2fbf6b; }
+  .bitcoin-block .fill > i.o80 { background: var(--warn); }
+  .bitcoin-block .fill > i.o83 { background: var(--bad); }
+  .bitcoin-block .pool { font-size: .6rem; font-weight: 600; color: #e7eaf6; letter-spacing: .01em;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: .18rem;
+    text-shadow: 0 1px 2px rgba(0,0,0,.5); }
+  .bitcoin-block .meta { font-size: .62rem; color: #cdd2ec; line-height: 1.4; }
+  .bitcoin-block .meta b { color: #fff; font-weight: 600; }
+  .bitcoin-block .meta .over { color: #f4d06a; font-weight: 600; }
+  .bitcoin-block .word { font-size: .6rem; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
+  .word.good { color: #6fe6a0; } .word.warn { color: #f4d06a; } .word.bad { color: #ff8a94; } .word.pending { color: #b9c0dc; }
+  .spin { display: inline-block; width: 9px; height: 9px; border: 2px solid #ffffff40;
+    border-top-color: #fff; border-radius: 50%; animation: spin .8s linear infinite; vertical-align: -1px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* detail panel */
+  #detail { margin-top: 3rem; }
+  .card { background: var(--panel-bg); border: 1px solid var(--border); border-radius: 12px;
+    padding: 1.4rem 1.5rem; }
+  .card.empty { color: var(--muted); text-align: center; padding: 2.4rem; font-size: .9rem; }
+  .card h2 { margin: 0 0 .25rem; font-size: 1.25rem; font-variant-numeric: tabular-nums; }
+  .card .sub { color: var(--muted); font-size: .8rem; word-break: break-all; margin-bottom: 1rem; }
+  .card .miner { font-size: .92rem; margin-bottom: 1.3rem; display: flex; align-items: baseline; gap: .55rem; flex-wrap: wrap; }
+  .card .miner b { color: var(--accent); font-weight: 600; }
+  .card .miner .ctag { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .7rem;
+    color: var(--muted); background: var(--stat-box-bg); border: 1px solid var(--border);
+    padding: .12rem .4rem; border-radius: 4px; word-break: break-all; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: .9rem; margin-bottom: 1.5rem; }
+  .cell { background: var(--stat-box-bg); border: 1px solid var(--border); border-radius: 8px; padding: .7rem .85rem; }
+  .cell .k { font-size: .68rem; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+  .cell .v { font-size: 1.15rem; font-weight: 600; margin-top: .2rem; font-variant-numeric: tabular-nums; }
+  .cell .v small { font-size: .7rem; color: var(--muted); font-weight: 400; }
+  .checks { display: flex; flex-wrap: wrap; gap: .5rem; margin-bottom: 1.4rem; }
+  .chk { font-size: .78rem; padding: .35rem .7rem; border-radius: 6px; display: flex; align-items: center; gap: .4rem;
+    background: var(--stat-box-bg); border: 1px solid var(--border); }
+  .chk .ic { width: 15px; height: 15px; border-radius: 50%; display: inline-grid; place-items: center;
+    font-size: .68rem; font-weight: 700; }
+  .chk.pass .ic { background: rgba(26,158,75,.25); color: #6fe6a0; }
+  .chk.fail .ic { background: rgba(220,53,69,.28); color: #ff8a94; }
+  .chk.skip .ic { background: rgba(139,147,176,.22); color: #b9c0dc; }
+
+  .hbar { height: 10px; border-radius: 5px; background: var(--stat-box-bg); overflow: hidden; margin: .5rem 0 1rem;
+    border: 1px solid var(--border); display: flex; }
+  .hbar > i { display: block; height: 100%; }
+  .hbar > i.clean { background: #2a9e57; }
+  .hbar > i.o80 { background: var(--warn); }
+  .hbar > i.o83 { background: var(--bad); }
+  .legend { display: flex; gap: 1.1rem; flex-wrap: wrap; font-size: .74rem; color: var(--muted); margin-bottom: 1.2rem; }
+  .legend span { display: inline-flex; align-items: center; gap: .35rem; }
+  .legend i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+
+  table.ex { width: 100%; border-collapse: collapse; font-size: .78rem; }
+  table.ex th, table.ex td { text-align: left; padding: .4rem .5rem; border-bottom: 1px solid var(--border); }
+  table.ex th { color: var(--muted); font-weight: 500; text-transform: uppercase; font-size: .66rem; letter-spacing: .05em; }
+  table.ex td.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .72rem; }
+  table.ex td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .over { color: #f4d06a; font-weight: 600; }
+
+  footer { color: var(--muted); font-size: .78rem; line-height: 1.6; margin-top: 3.5rem;
+    border-top: 1px solid var(--border); padding-top: 1.3rem; }
+</style>
+</head>
+<body>
+<header class="nav">
+  <a class="brand" href="./">block<span class="dot">·</span>health</a>
+  <nav class="menu">
+    <a href="./" class="active">Blocks</a>
+    <a href="./about.html">About</a>
+  </nav>
+  <span class="spacer"></span>
+  <span class="status"><span class="pulse" id="pulse"></span><span id="statusText">connecting…</span></span>
+</header>
+
+<div class="wrap">
+  <p class="lede">
+    The newest 12 Bitcoin blocks, delivered over <a href="https://nip-333.github.io/" target="_blank" rel="noopener">NIP-333</a>
+    and re-validated in your browser — no trusted server. <a href="./about.html">How it works →</a>
+  </p>
+
+  <div class="stats" id="stats">
+    <div class="stat"><div class="k">chain tip</div><div class="v" id="s-tip">—</div></div>
+    <div class="stat"><div class="k">blocks validated</div><div class="v" id="s-valid">0 / 12</div></div>
+    <div class="stat"><div class="k">with OP_RETURN data</div><div class="v" id="s-hasor">—</div></div>
+    <div class="stat"><div class="k">outputs over 80/83 B</div><div class="v" id="s-over">—</div></div>
+    <div class="stat"><div class="k">feed age</div><div class="v" id="s-age">—</div></div>
+  </div>
+
+  <p class="section-label">last 12 blocks — click one for its health detail</p>
+  <div class="chain-scroll"><div class="chain" id="chain"></div></div>
+
+  <div id="detail">
+    <div class="card empty">Select a block above to see its validation result and OP_RETURN breakdown.</div>
+  </div>
+
+  <footer>
+    Trustless by construction: the Nostr publisher key is a filter, not an authority — proof-of-work and the
+    consensus rules are re-checked locally, so a lying relay or publisher is detected, not obeyed.
+    Blocks fetched from mempool.space / blockstream.info (esplora). No build step, no backend — static files on GitHub Pages.
+    <span id="pub"></span>
+  </footer>
+</div>
+
+<script type="module">
+import { Codec } from './engine/codec/codec.js';
+import { verifyNostrEvent } from './engine/codec/nostr.js';
+
+const RELAYS = ['wss://relay.damus.io', 'wss://nos.lol', 'wss://relay.primal.net'];
+const PUBKEY = 'cccccccc829b802b7bf52d43edf7cfe62ac89f332a318b6826ac8bd6e73660da';
+const KIND = 33333;
+const NETWORK = 'btc';          // NIP-333 d-tag
+const HEADER_HEX = 160;
+const POLL_MS = 30000;
+
+const $ = (id) => document.getElementById(id);
+const fmt = (n) => n.toLocaleString('en-US');
+const escapeHtml = (s) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const setStatus = (text, cls) => { $('statusText').textContent = text; $('pulse').className = 'pulse' + (cls ? ' ' + cls : ''); };
+$('pub').textContent = `Publisher ${PUBKEY.slice(0, 8)}…${PUBKEY.slice(-4)}.`;
+
+// ---- lightweight codec on the main thread (headers only) ----
+const jl = (n) => fetch(`./engine/schema/${n}.jsonld`).then((r) => r.json());
+const [core, proof, p2p] = await Promise.all([jl('core'), jl('proof'), jl('p2p')]);
+const codec = new Codec(core, proof, p2p);
+
+// ---- validation worker ----
+const worker = new Worker('./validator-worker.js', { type: 'module' });
+let workerReady = false;
+const workerQueue = [];
+worker.postMessage({ type: 'init', network: 'btc:mainnet' });
+worker.onmessage = (ev) => {
+  const m = ev.data;
+  if (m.type === 'ready') { workerReady = true; drainQueue(); return; }
+  if (m.type === 'result') onValidated(m.hash, m.result);
+  if (m.type === 'error') onValidateError(m.hash, m.error);
+};
+function requestValidate(hash, height) {
+  if (!workerReady) { workerQueue.push({ hash, height }); return; }
+  worker.postMessage({ type: 'validate', hash, height });
+}
+function drainQueue() { while (workerQueue.length) { const j = workerQueue.shift(); worker.postMessage({ type: 'validate', ...j }); } }
+
+// ---- state ----
+const blocks = new Map();  // hash -> { height, header, hex, el, state, result }
+let tipHeight = null, lastEventAt = null, selected = null;
+
+// ---- nostr ----
+function fetchFromRelay(url) {
+  return new Promise((resolve) => {
+    let ws; let newest = null;
+    const done = (v) => { clearTimeout(t); try { ws?.close(); } catch {} resolve(v); };
+    const t = setTimeout(() => done(newest), 8000);
+    try { ws = new WebSocket(url); } catch { return done(null); }
+    ws.onopen = () => ws.send(JSON.stringify(['REQ', 'bh', { kinds: [KIND], authors: [PUBKEY], '#d': [NETWORK], limit: 1 }]));
+    ws.onmessage = (ev) => {
+      let m; try { m = JSON.parse(ev.data); } catch { return; }
+      if (m[0] === 'EVENT') { const e = m[2]; if (!newest || e.created_at > newest.created_at) newest = e; }
+      else if (m[0] === 'EOSE') done(newest);
+    };
+    ws.onerror = () => done(newest);
+    ws.onclose = () => done(newest);
+  });
+}
+
+async function poll() {
+  let events;
+  try {
+    events = (await Promise.all(RELAYS.map(fetchFromRelay))).filter(Boolean).filter(verifyNostrEvent);
+  } catch { events = []; }
+  if (!events.length) { if (!tipHeight) setStatus('no valid event on any relay', 'err'); return; }
+  const event = events.reduce((a, b) => (b.created_at > a.created_at ? b : a));
+  ingest(event);
+}
+
+function ingest(event) {
+  const c = event.content || '';
+  if (!/^[0-9a-f]*$/.test(c) || c.length % HEADER_HEX !== 0 || !c.length) { setStatus('malformed event content', 'err'); return; }
+  const tip = parseInt(event.tags.find((t) => t[0] === 'tip')?.[1] ?? '', 10);
+  if (!Number.isFinite(tip)) { setStatus('event missing tip tag', 'err'); return; }
+  if (tipHeight != null && tip <= tipHeight) { lastEventAt = event.created_at; refreshAge(); setStatus('live · up to date', 'live'); return; }
+
+  const n = c.length / HEADER_HEX;
+  const parsed = [];
+  let prevHash = null, chainOk = true;
+  for (let i = 0; i < n; i++) {
+    const hex = c.slice(i * HEADER_HEX, (i + 1) * HEADER_HEX);
+    const header = codec.decode('BlockHeader', hex);
+    const hash = codec.blockHash(header);
+    const powOk = codec.checkProofOfWork(header);
+    const linkOk = prevHash == null ? true : header.prevBlockHash === prevHash;
+    if (!powOk || !linkOk) chainOk = false;
+    parsed.push({ hex, header, hash, height: tip - n + 1 + i, powOk, linkOk });
+    prevHash = hash;
+  }
+  if (!chainOk) { setStatus('header PoW / linkage check FAILED', 'err'); }
+
+  tipHeight = tip; lastEventAt = event.created_at;
+  $('s-tip').textContent = '#' + fmt(tip);
+  setStatus(chainOk ? 'live · headers verified' : 'header verification failed', chainOk ? 'live' : 'err');
+
+  // newest on the left
+  const ordered = parsed.slice().reverse();
+  const chain = $('chain');
+  const known = new Set(blocks.keys());
+  chain.innerHTML = '';
+  for (const b of ordered) {
+    let rec = blocks.get(b.hash);
+    const isNew = !known.has(b.hash);
+    if (!rec) {
+      rec = { ...b, state: 'pending', result: null, el: null };
+      blocks.set(b.hash, rec);
+      requestValidate(b.hash, b.height);
+    }
+    const col = renderBlock(rec, isNew && known.size > 0);
+    chain.appendChild(col);
+  }
+  // drop blocks that scrolled out of the 12-window
+  const live = new Set(ordered.map((b) => b.hash));
+  for (const h of [...blocks.keys()]) if (!live.has(h)) blocks.delete(h);
+
+  refreshAge(); refreshSummary();
+}
+
+function healthClass(r) {
+  if (!r) return 'pending';
+  if (!r.structOk || !r.ctxOk || !r.powOk) return 'bad';
+  if (r.health.over83 > 0 || r.health.over80 > 0) return 'warn';
+  return 'good';
+}
+
+function ago(unixSec) {
+  const s = Math.max(0, Math.floor(Date.now() / 1000 - unixSec));
+  if (s < 90) return `${s}s ago`;
+  if (s < 5400) return `${Math.round(s / 60)}m ago`;
+  if (s < 86400) return `${(s / 3600).toFixed(1)}h ago`;
+  return `${Math.round(s / 86400)}d ago`;
+}
+
+function renderBlock(rec, animate) {
+  const el = document.createElement('div');
+  el.className = 'bitcoin-block';
+  if (animate) el.classList.add('newblock');
+  el.title = rec.hash;
+  el.onclick = () => selectBlock(rec.hash);
+  rec.el = el;
+  paintFace(el, rec);
+
+  const col = document.createElement('div');
+  col.className = 'block-col';
+  const when = document.createElement('div');
+  when.className = 'when';
+  when.textContent = ago(rec.header.time);
+  col.appendChild(el);
+  col.appendChild(when);
+  rec.col = col; rec.when = when;
+  return col;
+}
+
+function paintFace(el, rec) {
+  const r = rec.result;
+  const cls = rec.state === 'pending' ? 'pending' : rec.state === 'error' ? 'bad' : healthClass(r);
+  el.className = 'bitcoin-block ' + cls +
+    (el.classList.contains('newblock') ? ' newblock' : '') + (selected === rec.hash ? ' sel' : '');
+
+  let inner;
+  if (rec.state === 'pending') {
+    inner = `<div class="bottom"><span class="word pending"><span class="spin"></span> validating</span></div>`;
+  } else if (rec.state === 'error') {
+    inner = `<div class="bottom"><span class="word bad">load failed</span></div>`;
+  } else {
+    const h = r.health;
+    const over = Math.max(h.over80, h.over83);
+    const word = cls === 'good' ? 'healthy' : cls === 'warn' ? 'bloated' : 'invalid';
+    const total = h.outputs || 1;
+    const o83 = 100 * h.over83 / total;
+    const o80 = 100 * Math.max(0, over - h.over83) / total;
+    const clean = Math.max(0, 100 - o83 - o80);
+    const pool = r.miner?.pool;
+    inner = `<div class="bottom">
+      ${pool ? `<span class="pool" title="mined by ${pool}">⛏ ${pool}</span>` : ''}
+      <div class="fill"><i class="clean" style="width:${clean}%"></i><i class="o80" style="width:${o80}%"></i><i class="o83" style="width:${o83}%"></i></div>
+      <span class="meta"><b>${fmt(r.txCount)}</b> tx · ${(r.sizeBytes / 1e6).toFixed(2)} MB${over ? ` · <span class="over">${over} big</span>` : ''}</span>
+      <span class="word ${cls}">${word}</span>
+    </div>`;
+  }
+  el.innerHTML = `<div class="face"><span class="h">#${fmt(rec.height)}</span>${inner}</div>`;
+}
+
+function onValidated(hash, result) {
+  const rec = blocks.get(hash);
+  if (!rec) return;
+  rec.state = 'done'; rec.result = result;
+  if (rec.el) paintFace(rec.el, rec);
+  refreshSummary();
+  if (selected === hash) renderDetail(rec);
+}
+function onValidateError(hash, error) {
+  const rec = blocks.get(hash);
+  if (!rec) return;
+  rec.state = 'error'; rec.error = error;
+  if (rec.el) paintFace(rec.el, rec);
+}
+
+function refreshSummary() {
+  const recs = [...blocks.values()];
+  const done = recs.filter((r) => r.state === 'done');
+  $('s-valid').textContent = `${done.length} / ${recs.length || 12}`;
+  const hasOR = done.filter((r) => r.result.health.outputs > 0).length;
+  const totalOver = done.reduce((s, r) => s + Math.max(r.result.health.over83, r.result.health.over80), 0);
+  const s2 = $('s-hasor'); s2.textContent = done.length ? `${hasOR} / ${done.length}` : '—';
+  const s3 = $('s-over'); s3.textContent = done.length ? fmt(totalOver) : '—';
+  s3.className = 'v ' + (totalOver > 0 ? 'warn' : 'good');
+  s2.className = 'v';
+}
+
+function refreshAge() {
+  for (const rec of blocks.values()) if (rec.when && rec.header) rec.when.textContent = ago(rec.header.time);
+  if (!lastEventAt) return;
+  $('s-age').textContent = ago(lastEventAt);
+}
+setInterval(refreshAge, 5000);
+
+// ---- detail ----
+function selectBlock(hash) {
+  selected = hash;
+  for (const rec of blocks.values()) if (rec.el) rec.el.classList.toggle('sel', rec.hash === hash);
+  renderDetail(blocks.get(hash));
+}
+
+function chk(state, label) {
+  const cls = state === true ? 'pass' : state === false ? 'fail' : 'skip';
+  const ic = state === true ? '✓' : state === false ? '✕' : '–';
+  return `<span class="chk ${cls}"><span class="ic">${ic}</span>${label}</span>`;
+}
+
+function renderDetail(rec) {
+  const d = $('detail');
+  if (!rec) { d.innerHTML = '<div class="card empty">Select a block.</div>'; return; }
+  if (rec.state !== 'done') {
+    const msg = rec.state === 'error' ? `Could not load this block (${rec.error || 'network error'}).` : 'Validating this block…';
+    d.innerHTML = `<div class="card"><h2>#${fmt(rec.height)}</h2><div class="sub">${rec.hash}</div><p style="color:var(--muted)">${msg}</p></div>`;
+    return;
+  }
+  const r = rec.result, h = r.health;
+  const total = h.outputs || 1;
+  const clean = Math.max(0, h.outputs - Math.max(h.over80, h.over83));
+  const pct = (n) => (100 * n / total).toFixed(3) + '%';
+  const bar = `<div class="hbar">
+    <i class="clean" style="width:${pct(clean)}"></i>
+    <i class="o80" style="width:${pct(Math.max(0, Math.max(h.over80, h.over83) - h.over83))}"></i>
+    <i class="o83" style="width:${pct(h.over83)}"></i></div>`;
+
+  const rows = h.examples.map((e) => `<tr>
+      <td class="mono">${e.txid.slice(0, 10)}…:${e.vout}</td>
+      <td class="num ${e.dataBytes > 80 ? 'over' : ''}">${e.dataBytes != null ? e.dataBytes + ' B' : '—'}</td>
+      <td class="num ${e.spkBytes > 83 ? 'over' : ''}">${e.spkBytes} B</td>
+      <td>${e.coinbase ? 'coinbase' : 'tx'}</td></tr>`).join('');
+
+  const miner = r.miner || {};
+  d.innerHTML = `<div class="card">
+    <h2>Block #${fmt(rec.height)}</h2>
+    <div class="sub">${rec.hash}</div>
+
+    <div class="miner">⛏ mined by <b>${miner.pool || 'unrecognised pool'}</b>
+      ${miner.tag ? `<span class="ctag" title="coinbase scriptSig (printable ASCII)">${escapeHtml(miner.tag).slice(0, 80)}</span>` : ''}</div>
+
+    <div class="checks">
+      ${chk(rec.powOk, 'header proof-of-work')}
+      ${chk(rec.linkOk, 'chain linkage')}
+      ${chk(r.structOk, 'block structure / merkle root')}
+      ${chk(r.ctxOk, 'context rules (no prevouts)')}
+    </div>
+
+    <div class="grid">
+      <div class="cell"><div class="k">transactions</div><div class="v">${fmt(r.txCount)}</div></div>
+      <div class="cell"><div class="k">size</div><div class="v">${(r.sizeBytes / 1e6).toFixed(2)} <small>MB</small></div></div>
+      <div class="cell"><div class="k">weight</div><div class="v">${(r.weight / 1e6).toFixed(2)} <small>MWU</small></div></div>
+      <div class="cell"><div class="k">OP_RETURN outputs</div><div class="v">${fmt(h.outputs)}</div></div>
+      <div class="cell"><div class="k">over 80 B data</div><div class="v ${h.over80 ? 'over' : ''}">${fmt(h.over80)}</div></div>
+      <div class="cell"><div class="k">over 83 B script</div><div class="v ${h.over83 ? 'over' : ''}">${fmt(h.over83)}</div></div>
+      <div class="cell"><div class="k">largest payload</div><div class="v">${fmt(h.maxData)} <small>B</small></div></div>
+      <div class="cell"><div class="k">coinbase reward</div><div class="v">${(r.coinbaseOutValue / 1e8).toFixed(4)} <small>BTC</small></div></div>
+    </div>
+
+    <p class="section-label" style="margin:.2rem 0 .3rem">datacarrier composition (${fmt(h.outputs)} OP_RETURN outputs)</p>
+    ${bar}
+    <div class="legend">
+      <span><i style="background:#2a9e57"></i> within 80/83 B standard</span>
+      <span><i style="background:var(--warn)"></i> over 80 B data</span>
+      <span><i style="background:var(--bad)"></i> over 83 B script</span>
+      <span style="margin-left:auto">+ ${fmt(h.witnessCommitments)} witness-commitment OP_RETURN (protocol)</span>
+    </div>
+
+    ${h.examples.length ? `<p class="section-label" style="margin:1.2rem 0 .3rem">largest oversize outputs</p>
+    <table class="ex"><thead><tr><th>output</th><th class="num">data</th><th class="num">script</th><th>in</th></tr></thead>
+    <tbody>${rows}</tbody></table>` :
+    `<p style="color:var(--muted);font-size:.85rem;margin-top:1rem">Every OP_RETURN in this block stays within the historical 80/83-byte datacarrier standard.</p>`}
+  </div>`;
+}
+
+// ---- go ----
+setStatus('fetching NIP-333 event…');
+await poll();
+setInterval(poll, POLL_MS);
+</script>
+</body>
+</html>
