@@ -494,7 +494,7 @@ function renderDetail(rec) {
     <i class="o83" style="width:${pct(h.over83)}"></i></div>`;
 
   const rows = h.examples.map((e) => `<tr>
-      <td class="mono">${e.txid.slice(0, 10)}…:${e.vout}</td>
+      <td class="mono"><a href="https://mempool.guide/tx/${e.txid}" target="_blank" rel="noopener" title="open ${e.txid} on mempool.guide">${e.txid.slice(0, 10)}…:${e.vout} ↗</a></td>
       <td class="num ${e.dataBytes > 80 ? 'over' : ''}">${e.dataBytes != null ? e.dataBytes + ' B' : '—'}</td>
       <td class="num ${e.spkBytes > 83 ? 'over' : ''}">${e.spkBytes} B</td>
       <td>${e.coinbase ? 'coinbase' : 'tx'}</td></tr>`).join('');
