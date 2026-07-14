@@ -282,6 +282,7 @@ function pump() {
 // ---- state ----
 const blocks = new Map();  // hash -> { height, header, hex, el, state, result }
 let tipHeight = null, lastEventAt = null, selected = null;
+let autoFollow = true; // keep the detail panel on the tip until the user picks a block
 
 // ---- nostr ----
 function fetchFromRelay(url) {
@@ -357,6 +358,9 @@ function ingest(event) {
   const live = new Set(ordered.map((b) => b.hash));
   for (const h of [...blocks.keys()]) if (!live.has(h)) blocks.delete(h);
 
+  // default the detail panel to the tip (and follow it) until the user chooses
+  if (autoFollow && ordered.length) selectBlock(ordered[0].hash);
+
   refreshAge(); refreshSummary();
 }
 
@@ -380,7 +384,7 @@ function renderBlock(rec, animate) {
   el.className = 'bitcoin-block';
   if (animate) el.classList.add('newblock');
   el.title = rec.hash;
-  el.onclick = () => selectBlock(rec.hash);
+  el.onclick = () => { autoFollow = false; selectBlock(rec.hash); };
   rec.el = el;
   paintFace(el, rec);
 
