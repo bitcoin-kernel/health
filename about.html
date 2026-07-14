@@ -169,7 +169,10 @@
       <a href="https://opnet.org/" target="_blank" rel="noopener">OP_NET</a>, a smart-contract metaprotocol whose
       epoch-mining participants submit SHA-1 proof-of-work solutions on-chain. The payload carries the solver's
       account key and the solution preimage.</li>
-    <li><strong>plain data</strong> — any other <code>OP_RETURN</code> (timestamps, protocol messages, raw bytes).</li>
+    <li><strong>bridge deposit</strong> — a <em>heuristic</em>, not a magic byte: a printable-ASCII memo that routes a
+      custodial/bridge deposit, e.g. <code>0x&lt;hex&gt;|depositor=bc1q…|</code> — an EVM-style destination plus a
+      depositor/refund field. Flagged conservatively, so it may miss uncommon formats.</li>
+    <li><strong>plain data</strong> — any other <code>OP_RETURN</code> (timestamps, protocol messages, raw bytes, padding).</li>
   </ul>
   <p>The block faces show per-block counts (<code>⚗ Alkanes</code>, <code>ᚱ Runes</code>) and the detail panel
     labels each oversize output by type. In practice Alkanes protostones dominate the oversize traffic —

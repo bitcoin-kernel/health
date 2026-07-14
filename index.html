@@ -159,6 +159,7 @@
   .pchip.alk { background: rgba(94,234,212,.18); color: #7ff0dc; }
   .pchip.runes { background: rgba(183,148,246,.2); color: #cbb4ff; }
   .pchip.proto { background: rgba(148,163,184,.2); color: #cbd3e6; }
+  .pchip.bridge { background: rgba(242,163,199,.2); color: #f6b9d3; }
   .bitcoin-block .meta { font-size: .62rem; color: #cdd2ec; line-height: 1.4; }
   .bitcoin-block .meta b { color: #fff; font-weight: 600; }
   .bitcoin-block .meta .over { color: #f4d06a; font-weight: 600; }
@@ -188,6 +189,7 @@
   td .ptag.alk { background: rgba(94,234,212,.18); color: #7ff0dc; }
   td .ptag.runes { background: rgba(183,148,246,.2); color: #cbb4ff; }
   td .ptag.proto { background: rgba(148,163,184,.2); color: #cbd3e6; }
+  td .ptag.bridge { background: rgba(242,163,199,.2); color: #f6b9d3; }
   td .ptag.data { color: var(--muted); }
   .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: .9rem; margin-bottom: 1.5rem; }
   .cell { background: var(--stat-box-bg); border: 1px solid var(--border); border-radius: 8px; padding: .7rem .85rem; }
@@ -281,7 +283,7 @@ const $ = (id) => document.getElementById(id);
 const fmt = (n) => n.toLocaleString('en-US');
 const abbr = (n) => n < 1000 ? String(n) : n < 1e6 ? (n / 1e3).toFixed(n < 1e4 ? 1 : 0) + 'k' : (n / 1e6).toFixed(1) + 'M';
 const escapeHtml = (s) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-const PROTO = { opnet: { label: 'OP_NET', icon: '◈', cls: 'opnet' }, alkanes: { label: 'Alkanes', icon: '⚗', cls: 'alk' }, runes: { label: 'Runes', icon: 'ᚱ', cls: 'runes' }, protostone: { label: 'protostone', icon: '⬡', cls: 'proto' }, data: { label: 'data', icon: '·', cls: 'data' } };
+const PROTO = { opnet: { label: 'OP_NET', icon: '◈', cls: 'opnet' }, alkanes: { label: 'Alkanes', icon: '⚗', cls: 'alk' }, runes: { label: 'Runes', icon: 'ᚱ', cls: 'runes' }, protostone: { label: 'protostone', icon: '⬡', cls: 'proto' }, bridge: { label: 'bridge', icon: '⇄', cls: 'bridge' }, data: { label: 'data', icon: '·', cls: 'data' } };
 const setStatus = (text, cls) => { $('statusText').textContent = text; $('pulse').className = 'pulse' + (cls ? ' ' + cls : ''); };
 $('pub').textContent = `Publisher ${PUBKEY.slice(0, 8)}…${PUBKEY.slice(-4)}.`;
 
@@ -461,6 +463,7 @@ function paintFace(el, rec) {
     if (h.alkanes) chips.push(`<span class="pchip alk" title="${fmt(h.alkanes)} Alkanes protostones">⚗ ${abbr(h.alkanes)}</span>`);
     if (h.runes) chips.push(`<span class="pchip runes" title="${fmt(h.runes)} runestones">ᚱ ${abbr(h.runes)}</span>`);
     if (h.protostone) chips.push(`<span class="pchip proto" title="${fmt(h.protostone)} other protostones">⬡ ${abbr(h.protostone)}</span>`);
+    if (h.bridge) chips.push(`<span class="pchip bridge" title="${fmt(h.bridge)} bridge deposit memos">⇄ ${abbr(h.bridge)}</span>`);
     inner = `<div class="bottom">
       ${chips.length ? `<span class="protos">${chips.join('')}</span>` : ''}
       ${pool ? `<span class="pool" title="mined by ${pool}">⛏ ${pool}</span>` : ''}
@@ -557,7 +560,8 @@ function renderDetail(rec) {
       ${h.alkanes ? `<span class="pchip alk">⚗ ${fmt(h.alkanes)} Alkanes</span>` : ''}
       ${h.runes ? `<span class="pchip runes">ᚱ ${fmt(h.runes)} Runes</span>` : ''}
       ${h.protostone ? `<span class="pchip proto">⬡ ${fmt(h.protostone)} protostone</span>` : ''}
-      ${(() => { const plain = h.outputs - h.opnet - h.alkanes - h.runes - h.protostone; return plain > 0 ? `<span class="pchip data">· ${fmt(plain)} plain data</span>` : ''; })()}
+      ${h.bridge ? `<span class="pchip bridge">⇄ ${fmt(h.bridge)} bridge deposits</span>` : ''}
+      ${(() => { const plain = h.outputs - h.opnet - h.alkanes - h.runes - h.protostone - h.bridge; return plain > 0 ? `<span class="pchip data">· ${fmt(plain)} plain data</span>` : ''; })()}
       ${h.outputs === 0 ? `<span style="color:var(--muted);font-size:.82rem">no OP_RETURN datacarrier outputs</span>` : ''}
     </div>
 

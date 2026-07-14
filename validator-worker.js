@@ -69,22 +69,40 @@ function leb128List(bytes) {
 
 function firstLeb(bytes) { let v = 0n, s = 0n, i = 0; while (i < bytes.length) { const x = bytes[i++]; v |= BigInt(x & 0x7f) << s; if ((x & 0x80) === 0) break; s += 7n; } return v; }
 
-// -> 'opnet' | 'alkanes' | 'protostone' | 'runes' | 'data'  (mutually exclusive)
+// Best-effort: a plain-text OP_RETURN that routes a custodial/bridge deposit —
+// an EVM-style 0x address and/or a depositor/recipient/refund field, e.g.
+//   0x<hex>|depositor=bc1q…|
+// This is a HEURISTIC, not a protocol magic byte, so it is kept conservative:
+// the payload must be almost entirely printable ASCII and carry a strong signal.
+function looksLikeBridge(spk) {
+  const data = collectPushData(hexBytes(spk), 1); // pushes after OP_RETURN
+  if (data.length < 20) return false;
+  const printable = data.filter((x) => x >= 0x20 && x <= 0x7e).length / data.length;
+  if (printable < 0.9) return false;
+  let s = ''; for (let i = 0; i < data.length && i < 1024; i++) s += String.fromCharCode(data[i]);
+  const evm = /0x[0-9a-fA-F]{40}/.test(s); // 20-byte (or longer) EVM-style destination
+  const kw = /(depositor|recipient|refund|destination|bridge|deposit|dest)\s*[=:]/i.test(s);
+  return evm || kw;
+}
+
+// -> 'opnet' | 'alkanes' | 'protostone' | 'runes' | 'bridge' | 'data'  (mutually exclusive)
 function classifyOpReturn(spk) {
   if (spk.startsWith('6a58')) return 'opnet';       // OP_RETURN OP_8: OP_NET epoch challenge submission
-  if (!spk.startsWith('6a5d')) return 'data';       // not a runestone
-  const bytes = hexBytes(spk);
-  const ints = leb128List(collectPushData(bytes, 2)); // payload after 6a 5d
-  const chunks = [];
-  for (let k = 0; k + 1 < ints.length; k += 2) {
-    const tag = ints[k];
-    if (tag === 0n) break;                 // Body tag: edicts follow, stop scanning fields
-    if (tag === 16383n) chunks.push(ints[k + 1]); // protorunes Protocol field
+  if (spk.startsWith('6a5d')) {                     // runestone: Runes / Alkanes / other protostone
+    const ints = leb128List(collectPushData(hexBytes(spk), 2)); // payload after 6a 5d
+    const chunks = [];
+    for (let k = 0; k + 1 < ints.length; k += 2) {
+      const tag = ints[k];
+      if (tag === 0n) break;                 // Body tag: edicts follow, stop scanning fields
+      if (tag === 16383n) chunks.push(ints[k + 1]); // protorunes Protocol field
+    }
+    if (!chunks.length) return 'runes';      // plain rune op (etch / mint / transfer)
+    const pb = [];
+    for (const v of chunks) { let x = v; for (let j = 0; j < 15; j++) { pb.push(Number(x & 0xffn)); x >>= 8n; } }
+    return firstLeb(pb) === 1n ? 'alkanes' : 'protostone';
   }
-  if (!chunks.length) return 'runes';      // plain rune op (etch / mint / transfer)
-  const pb = [];
-  for (const v of chunks) { let x = v; for (let j = 0; j < 15; j++) { pb.push(Number(x & 0xffn)); x >>= 8n; } }
-  return firstLeb(pb) === 1n ? 'alkanes' : 'protostone';
+  if (looksLikeBridge(spk)) return 'bridge';        // ASCII deposit memo
+  return 'data';
 }
 
 // Datacarrier health across every OP_RETURN output in the block.
@@ -92,7 +110,7 @@ function classifyOpReturn(spk) {
 // user data, so it's counted separately and never flagged oversize.
 function measureHealth(block, codec) {
   let outputs = 0, over80 = 0, over83 = 0, maxData = 0, maxSpk = 0, witnessCommitments = 0;
-  let alkanes = 0, runes = 0, protostone = 0, opnet = 0; // disjoint metaprotocol tallies
+  let alkanes = 0, runes = 0, protostone = 0, opnet = 0, bridge = 0; // disjoint metaprotocol tallies
   const examples = [];
   block.transactions.forEach((tx, ti) => {
     tx.outputs.forEach((o, vout) => {
@@ -105,6 +123,7 @@ function measureHealth(block, codec) {
       else if (proto === 'alkanes') alkanes++;
       else if (proto === 'runes') runes++;
       else if (proto === 'protostone') protostone++;
+      else if (proto === 'bridge') bridge++;
       const spkBytes = spk.length / 2;
       const dataBytes = opReturnDataBytes(spk);
       maxSpk = Math.max(maxSpk, spkBytes);
@@ -119,7 +138,7 @@ function measureHealth(block, codec) {
     });
   });
   examples.sort((a, b) => (b.dataBytes ?? b.spkBytes) - (a.dataBytes ?? a.spkBytes));
-  return { outputs, over80, over83, maxData, maxSpk, witnessCommitments, alkanes, runes, protostone, opnet, examples };
+  return { outputs, over80, over83, maxData, maxSpk, witnessCommitments, alkanes, runes, protostone, opnet, bridge, examples };
 }
 
 const failures = (verdict) =>
