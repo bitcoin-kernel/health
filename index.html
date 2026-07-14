@@ -152,6 +152,12 @@
   .bitcoin-block .pool { font-size: .6rem; font-weight: 600; color: #e7eaf6; letter-spacing: .01em;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: .18rem;
     text-shadow: 0 1px 2px rgba(0,0,0,.5); }
+  .bitcoin-block .protos { display: flex; gap: .22rem; margin-bottom: .2rem; }
+  .pchip { font-size: .56rem; font-weight: 700; letter-spacing: .02em; padding: .05rem .3rem; border-radius: 4px;
+    white-space: nowrap; }
+  .pchip.alk { background: rgba(94,234,212,.18); color: #7ff0dc; }
+  .pchip.runes { background: rgba(183,148,246,.2); color: #cbb4ff; }
+  .pchip.proto { background: rgba(148,163,184,.2); color: #cbd3e6; }
   .bitcoin-block .meta { font-size: .62rem; color: #cdd2ec; line-height: 1.4; }
   .bitcoin-block .meta b { color: #fff; font-weight: 600; }
   .bitcoin-block .meta .over { color: #f4d06a; font-weight: 600; }
@@ -173,6 +179,14 @@
   .card .miner .ctag { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .7rem;
     color: var(--muted); background: var(--stat-box-bg); border: 1px solid var(--border);
     padding: .12rem .4rem; border-radius: 4px; word-break: break-all; }
+  .protos-line { display: flex; flex-wrap: wrap; gap: .45rem; margin-bottom: 1.3rem; }
+  .protos-line .pchip { font-size: .78rem; padding: .22rem .55rem; }
+  .pchip.data { background: rgba(148,163,184,.16); color: #b6bfd6; }
+  td .ptag { font-size: .68rem; font-weight: 700; padding: .08rem .34rem; border-radius: 4px; }
+  td .ptag.alk { background: rgba(94,234,212,.18); color: #7ff0dc; }
+  td .ptag.runes { background: rgba(183,148,246,.2); color: #cbb4ff; }
+  td .ptag.proto { background: rgba(148,163,184,.2); color: #cbd3e6; }
+  td .ptag.data { color: var(--muted); }
   .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: .9rem; margin-bottom: 1.5rem; }
   .cell { background: var(--stat-box-bg); border: 1px solid var(--border); border-radius: 8px; padding: .7rem .85rem; }
   .cell .k { font-size: .68rem; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
@@ -228,8 +242,9 @@
   <div class="stats" id="stats">
     <div class="stat"><div class="k">chain tip</div><div class="v" id="s-tip">—</div></div>
     <div class="stat"><div class="k">blocks validated</div><div class="v" id="s-valid">0 / 12</div></div>
-    <div class="stat"><div class="k">with OP_RETURN data</div><div class="v" id="s-hasor">—</div></div>
     <div class="stat"><div class="k">outputs over 80/83 B</div><div class="v" id="s-over">—</div></div>
+    <div class="stat"><div class="k">Alkanes outputs</div><div class="v" id="s-alk">—</div></div>
+    <div class="stat"><div class="k">Runes outputs</div><div class="v" id="s-runes">—</div></div>
     <div class="stat"><div class="k">feed age</div><div class="v" id="s-age">—</div></div>
   </div>
 
@@ -261,7 +276,9 @@ const POLL_MS = 30000;
 
 const $ = (id) => document.getElementById(id);
 const fmt = (n) => n.toLocaleString('en-US');
+const abbr = (n) => n < 1000 ? String(n) : n < 1e6 ? (n / 1e3).toFixed(n < 1e4 ? 1 : 0) + 'k' : (n / 1e6).toFixed(1) + 'M';
 const escapeHtml = (s) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const PROTO = { alkanes: { label: 'Alkanes', icon: '⚗', cls: 'alk' }, runes: { label: 'Runes', icon: 'ᚱ', cls: 'runes' }, protostone: { label: 'protostone', icon: '⬡', cls: 'proto' }, data: { label: 'data', icon: '·', cls: 'data' } };
 const setStatus = (text, cls) => { $('statusText').textContent = text; $('pulse').className = 'pulse' + (cls ? ' ' + cls : ''); };
 $('pub').textContent = `Publisher ${PUBKEY.slice(0, 8)}…${PUBKEY.slice(-4)}.`;
 
@@ -436,7 +453,12 @@ function paintFace(el, rec) {
     const o80 = 100 * Math.max(0, over - h.over83) / total;
     const clean = Math.max(0, 100 - o83 - o80);
     const pool = r.miner?.pool;
+    const chips = [];
+    if (h.alkanes) chips.push(`<span class="pchip alk" title="${fmt(h.alkanes)} Alkanes protostones">⚗ ${abbr(h.alkanes)}</span>`);
+    if (h.runes) chips.push(`<span class="pchip runes" title="${fmt(h.runes)} runestones">ᚱ ${abbr(h.runes)}</span>`);
+    if (h.protostone) chips.push(`<span class="pchip proto" title="${fmt(h.protostone)} other protostones">⬡ ${abbr(h.protostone)}</span>`);
     inner = `<div class="bottom">
+      ${chips.length ? `<span class="protos">${chips.join('')}</span>` : ''}
       ${pool ? `<span class="pool" title="mined by ${pool}">⛏ ${pool}</span>` : ''}
       <div class="fill"><i class="clean" style="width:${clean}%"></i><i class="o80" style="width:${o80}%"></i><i class="o83" style="width:${o83}%"></i></div>
       <span class="meta"><b>${fmt(r.txCount)}</b> tx · ${(r.sizeBytes / 1e6).toFixed(2)} MB${over ? ` · <span class="over">${over} big</span>` : ''}</span>
@@ -465,12 +487,12 @@ function refreshSummary() {
   const recs = [...blocks.values()];
   const done = recs.filter((r) => r.state === 'done');
   $('s-valid').textContent = `${done.length} / ${recs.length || 12}`;
-  const hasOR = done.filter((r) => r.result.health.outputs > 0).length;
-  const totalOver = done.reduce((s, r) => s + Math.max(r.result.health.over83, r.result.health.over80), 0);
-  const s2 = $('s-hasor'); s2.textContent = done.length ? `${hasOR} / ${done.length}` : '—';
+  const sum = (f) => done.reduce((s, r) => s + f(r.result.health), 0);
+  const totalOver = sum((h) => Math.max(h.over83, h.over80));
   const s3 = $('s-over'); s3.textContent = done.length ? fmt(totalOver) : '—';
   s3.className = 'v ' + (totalOver > 0 ? 'warn' : 'good');
-  s2.className = 'v';
+  $('s-alk').textContent = done.length ? fmt(sum((h) => h.alkanes)) : '—';
+  $('s-runes').textContent = done.length ? fmt(sum((h) => h.runes)) : '—';
 }
 
 function refreshAge() {
@@ -510,11 +532,12 @@ function renderDetail(rec) {
     <i class="o80" style="width:${pct(Math.max(0, Math.max(h.over80, h.over83) - h.over83))}"></i>
     <i class="o83" style="width:${pct(h.over83)}"></i></div>`;
 
+  const ptag = (p) => { const d = PROTO[p] || PROTO.data; return `<span class="ptag ${d.cls}">${d.icon} ${d.label}</span>`; };
   const rows = h.examples.map((e) => `<tr>
       <td class="mono"><a href="https://mempool.guide/tx/${e.txid}" target="_blank" rel="noopener" title="open ${e.txid} on mempool.guide">${e.txid.slice(0, 10)}…:${e.vout} ↗</a></td>
       <td class="num ${e.dataBytes > 80 ? 'over' : ''}">${e.dataBytes != null ? e.dataBytes + ' B' : '—'}</td>
       <td class="num ${e.spkBytes > 83 ? 'over' : ''}">${e.spkBytes} B</td>
-      <td>${e.coinbase ? 'coinbase' : 'tx'}</td></tr>`).join('');
+      <td>${ptag(e.proto)}</td></tr>`).join('');
 
   const miner = r.miner || {};
   d.innerHTML = `<div class="card">
@@ -523,6 +546,14 @@ function renderDetail(rec) {
 
     <div class="miner">⛏ mined by <b>${miner.pool || 'unrecognised pool'}</b>
       ${miner.tag ? `<span class="ctag" title="coinbase scriptSig (printable ASCII)">${escapeHtml(miner.tag).slice(0, 80)}</span>` : ''}</div>
+
+    <div class="protos-line">
+      ${h.alkanes ? `<span class="pchip alk">⚗ ${fmt(h.alkanes)} Alkanes</span>` : ''}
+      ${h.runes ? `<span class="pchip runes">ᚱ ${fmt(h.runes)} Runes</span>` : ''}
+      ${h.protostone ? `<span class="pchip proto">⬡ ${fmt(h.protostone)} protostone</span>` : ''}
+      ${(() => { const plain = h.outputs - h.alkanes - h.runes - h.protostone; return plain > 0 ? `<span class="pchip data">· ${fmt(plain)} plain data</span>` : ''; })()}
+      ${h.outputs === 0 ? `<span style="color:var(--muted);font-size:.82rem">no OP_RETURN datacarrier outputs</span>` : ''}
+    </div>
 
     <div class="checks">
       ${chk(rec.powOk, 'header proof-of-work')}
@@ -552,7 +583,7 @@ function renderDetail(rec) {
     </div>
 
     ${h.examples.length ? `<p class="section-label" style="margin:1.2rem 0 .3rem">largest oversize outputs</p>
-    <table class="ex"><thead><tr><th>output</th><th class="num">data</th><th class="num">script</th><th>in</th></tr></thead>
+    <table class="ex"><thead><tr><th>output</th><th class="num">data</th><th class="num">script</th><th>type</th></tr></thead>
     <tbody>${rows}</tbody></table>` :
     `<p style="color:var(--muted);font-size:.85rem;margin-top:1rem">Every OP_RETURN in this block stays within the historical 80/83-byte datacarrier standard.</p>`}
   </div>`;

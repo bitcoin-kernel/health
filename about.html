@@ -153,7 +153,25 @@
     primary signal mempool.space uses — and shows the raw tag alongside, derived entirely from the block
     itself with no attribution service in the loop.</p>
 
-  <h2><span class="n">5</span>How it's built</h2>
+  <h2><span class="n">5</span>What kind of data — Runes &amp; Alkanes</h2>
+  <p>Not all datacarrier traffic is the same, so each <code>OP_RETURN</code> is classified straight from its
+    bytes:</p>
+  <ul>
+    <li><strong>Runes</strong> — a runestone begins with <code>OP_RETURN OP_13</code> (<code>6a 5d</code>),
+      the protocol's magic. That prefix alone identifies a Runes etch, mint, or transfer.</li>
+    <li><strong>Alkanes</strong> — a runestone can also carry a <em>protostone</em>: the
+      <a href="https://github.com/kungfuflex/alkanes-rs" target="_blank" rel="noopener">Alkanes</a>
+      metaprotocol packs its message into repeated Protocol-tag (<code>16383</code>) fields, each a
+      <code>u128</code> holding 15 payload bytes. Reassembling those 15-byte chunks and reading the first
+      integer gives the protocol id — <code>1</code> is Alkanes. Runes indexers ignore that odd tag, so the
+      message is invisible to them but decodable here.</li>
+    <li><strong>plain data</strong> — any other <code>OP_RETURN</code> (timestamps, protocol messages, raw bytes).</li>
+  </ul>
+  <p>The block faces show per-block counts (<code>⚗ Alkanes</code>, <code>ᚱ Runes</code>) and the detail panel
+    labels each oversize output by type. In practice Alkanes protostones dominate the oversize traffic —
+    which is precisely the demand for on-chain data that the relaxed datacarrier limit unlocked.</p>
+
+  <h2><span class="n">6</span>How it's built</h2>
   <p>Three static files and a vendored engine — no framework, no build step, no backend. It runs anywhere
     that serves files: GitHub Pages, a static host, a personal data pod.</p>
   <ul>
