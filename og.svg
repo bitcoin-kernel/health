@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
+  <defs>
+    <radialGradient id="bg" cx="30%" cy="26%" r="90%">
+      <stop offset="0%" stop-color="#1b2036"/>
+      <stop offset="55%" stop-color="#12141f"/>
+      <stop offset="100%" stop-color="#0c0e16"/>
+    </radialGradient>
+    <linearGradient id="goodFront" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#265046"/><stop offset="100%" stop-color="#16302b"/>
+    </linearGradient>
+    <linearGradient id="warnFront" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#50401f" /><stop offset="100%" stop-color="#2c2411"/>
+    </linearGradient>
+    <!-- isometric cube: front-face top-left at 0,0; s=120, depth 42 -->
+    <g id="cubeGood">
+      <polygon points="120,0 162,-42 162,78 120,120" fill="#12241f"/>
+      <polygon points="0,0 42,-42 162,-42 120,0" fill="#2f6154"/>
+      <rect width="120" height="120" fill="url(#goodFront)"/>
+      <rect width="120" height="120" fill="none" stroke="#3ecf86" stroke-opacity="0.35" stroke-width="2"/>
+      <rect width="120" height="6" fill="#2fbf6b"/>
+    </g>
+    <g id="cubeWarn">
+      <polygon points="120,0 162,-42 162,78 120,120" fill="#241c0f"/>
+      <polygon points="0,0 42,-42 162,-42 120,0" fill="#5f4c28"/>
+      <rect width="120" height="120" fill="url(#warnFront)"/>
+      <rect width="120" height="120" fill="none" stroke="#e6b23c" stroke-opacity="0.4" stroke-width="2"/>
+      <rect width="120" height="6" fill="#e0a80f"/>
+    </g>
+  </defs>
+
+  <rect width="1200" height="630" fill="url(#bg)"/>
+
+  <!-- wordmark -->
+  <text x="90" y="150" font-family="system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif"
+        font-size="76" font-weight="700" fill="#ffffff" letter-spacing="-1">block<tspan fill="#f7931a">·</tspan>health</text>
+
+  <!-- tagline -->
+  <text x="92" y="212" font-family="system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif"
+        font-size="30" fill="#c7cbe4" font-weight="500">Live Bitcoin blocks over NIP-333, re-validated in your browser.</text>
+  <text x="92" y="256" font-family="system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif"
+        font-size="30" fill="#8b93b0">Scored for OP_RETURN datacarrier health — no trusted server.</text>
+
+  <!-- isometric block row -->
+  <g transform="translate(150,430)">
+    <use href="#cubeGood" x="0"/>
+    <use href="#cubeWarn" x="190"/>
+    <use href="#cubeGood" x="380"/>
+    <use href="#cubeGood" x="570"/>
+    <use href="#cubeWarn" x="760"/>
+  </g>
+
+  <!-- heights over the blocks -->
+  <g font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="20" fill="#e7eaf6" font-weight="600">
+    <text x="150" y="415">#958002</text>
+    <text x="340" y="415">#958001</text>
+    <text x="530" y="415">#958000</text>
+    <text x="720" y="415">#957999</text>
+    <text x="910" y="415">#957998</text>
+  </g>
+
+  <!-- domain -->
+  <text x="1108" y="580" text-anchor="end" font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
+        font-size="24" fill="#00ddff">bitcoin-kernel.com/health</text>
+</svg>
