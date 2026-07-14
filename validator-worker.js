@@ -102,6 +102,8 @@ function classifyOpReturn(spk) {
     return firstLeb(pb) === 1n ? 'alkanes' : 'protostone';
   }
   if (looksLikeBridge(spk)) return 'bridge';        // ASCII deposit memo
+  const data = collectPushData(hexBytes(spk), 1);
+  if (data.length >= 8 && data.every((x) => x === 0)) return 'padding'; // all-zero reservation output
   return 'data';
 }
 
@@ -110,7 +112,7 @@ function classifyOpReturn(spk) {
 // user data, so it's counted separately and never flagged oversize.
 function measureHealth(block, codec) {
   let outputs = 0, over80 = 0, over83 = 0, maxData = 0, maxSpk = 0, witnessCommitments = 0;
-  let alkanes = 0, runes = 0, protostone = 0, opnet = 0, bridge = 0; // disjoint metaprotocol tallies
+  let alkanes = 0, runes = 0, protostone = 0, opnet = 0, bridge = 0, padding = 0; // disjoint metaprotocol tallies
   const examples = [];
   block.transactions.forEach((tx, ti) => {
     tx.outputs.forEach((o, vout) => {
@@ -124,6 +126,7 @@ function measureHealth(block, codec) {
       else if (proto === 'runes') runes++;
       else if (proto === 'protostone') protostone++;
       else if (proto === 'bridge') bridge++;
+      else if (proto === 'padding') padding++;
       const spkBytes = spk.length / 2;
       const dataBytes = opReturnDataBytes(spk);
       maxSpk = Math.max(maxSpk, spkBytes);
@@ -138,7 +141,7 @@ function measureHealth(block, codec) {
     });
   });
   examples.sort((a, b) => (b.dataBytes ?? b.spkBytes) - (a.dataBytes ?? a.spkBytes));
-  return { outputs, over80, over83, maxData, maxSpk, witnessCommitments, alkanes, runes, protostone, opnet, bridge, examples };
+  return { outputs, over80, over83, maxData, maxSpk, witnessCommitments, alkanes, runes, protostone, opnet, bridge, padding, examples };
 }
 
 const failures = (verdict) =>
