@@ -563,7 +563,7 @@ function renderDetail(rec) {
       ${h.runes ? `<span class="pchip runes">ᚱ ${fmt(h.runes)} Runes</span>` : ''}
       ${h.protostone ? `<span class="pchip proto">⬡ ${fmt(h.protostone)} protostone</span>` : ''}
       ${h.bridge ? `<span class="pchip bridge">⇄ ${fmt(h.bridge)} bridge deposits</span>` : ''}
-      ${h.padding ? `<span class="pchip pad">⌀ ${fmt(h.padding)} padding</span>` : ''}
+      ${h.padding ? `<span class="pchip pad">⌀ ${fmt(h.padding)} padding · ${fmt(h.paddingBytes)} B</span>` : ''}
       ${(() => { const plain = h.outputs - h.opnet - h.alkanes - h.runes - h.protostone - h.bridge - (h.padding || 0); return plain > 0 ? `<span class="pchip data">· ${fmt(plain)} plain data</span>` : ''; })()}
       ${h.outputs === 0 ? `<span style="color:var(--muted);font-size:.82rem">no OP_RETURN datacarrier outputs</span>` : ''}
     </div>
