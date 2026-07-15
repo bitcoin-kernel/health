@@ -96,6 +96,9 @@
   .sw.on::after { left: 19px; background: var(--accent); }
   .cache-stats { font-size: .8rem; color: var(--muted); margin-top: .5rem; font-variant-numeric: tabular-nums; }
   .cache-stats b { color: var(--fg); font-weight: 600; }
+  #storage .sbar { height: 8px; border-radius: 4px; background: #0b101899; overflow: hidden; box-shadow: inset 0 0 0 1px #ffffff12;
+    margin-top: .35rem; max-width: 340px; }
+  #storage .sbar > i { display: block; height: 100%; background: var(--accent); border-radius: 4px; transition: width .3s; }
   .toggle.soon { opacity: .65; }
   .toggle .t-name { font-weight: 600; font-size: .92rem; }
   .toggle .t-name .soon-tag { font-size: .62rem; font-weight: 700; text-transform: uppercase; letter-spacing: .05em;
@@ -170,6 +173,7 @@
         <div class="t-name">Cache blocks locally</div>
         <div class="t-desc">Persist validated blocks in your browser (OPFS) so they aren't re-fetched from a block API. Applies when the Blocks page reloads.</div>
         <div class="cache-stats" id="cache-stats">—</div>
+        <div id="storage" style="margin-top:.55rem"></div>
         <div class="row" style="margin-top:.6rem"><button id="clear-cache">Clear cache</button></div>
       </div>
     </div>
@@ -364,7 +368,26 @@ $('clear-cache').addEventListener('click', async (e) => {
   try { localStorage.removeItem('blockhealth.results'); localStorage.removeItem('blockhealth.classified'); } catch {} // result cache + all-time ledger
   if (store) { await store.clear(); await renderCacheStats(); }
   renderAllTime();
+  renderStorage();
 });
+function human(b) {
+  if (b == null) return '—';
+  if (b < 1024) return b + ' B';
+  if (b < 1e6) return (b / 1e3).toFixed(0) + ' KB';
+  if (b < 1e9) return (b / 1e6).toFixed(1) + ' MB';
+  return (b / 1e9).toFixed(2) + ' GB';
+}
+async function renderStorage() {
+  const el = $('storage');
+  if (!(navigator.storage && navigator.storage.estimate)) { el.style.display = 'none'; return; }
+  try {
+    const { usage, quota } = await navigator.storage.estimate();
+    const pct = quota ? (100 * usage / quota) : 0;
+    const pctStr = pct === 0 ? '0' : pct < 0.1 ? '<0.1' : pct.toFixed(pct < 1 ? 1 : 0);
+    el.innerHTML = `<div class="cache-stats">Browser storage: <b>${human(usage)}</b> of <b>${human(quota)}</b> (${pctStr}%)</div>`
+      + `<div class="sbar"><i style="width:${Math.max(0.4, Math.min(100, pct)).toFixed(2)}%"></i></div>`;
+  } catch { el.style.display = 'none'; }
+}
 async function renderCacheStats() {
   const el = $('cache-stats');
   if (!store) { el.innerHTML = 'Not supported in this browser (OPFS unavailable).'; $('x-cached').textContent = 'n/a'; return; }
@@ -382,12 +405,13 @@ window.addEventListener('storage', (e) => {
   if (e.key === 'blockhealth.stats') { renderStats(); renderCacheStats(); }
   if (e.key === 'blockhealth.classified') renderAllTime();
 });
-setInterval(() => { renderStats(); renderCacheStats(); renderAllTime(); }, 5000);
+setInterval(() => { renderStats(); renderCacheStats(); renderAllTime(); renderStorage(); }, 5000);
 loadConfig();
 renderCacheToggle();
 renderStats();
 renderCacheStats();
 renderAllTime();
+renderStorage();
 </script>
 </body>
 </html>
