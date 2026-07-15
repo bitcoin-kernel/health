@@ -295,6 +295,26 @@ const POLL_MS = 30000;
 const sessionSeen = new Set();
 let sessionBlocks = 0, sessionTxs = 0, sessionBytes = 0, sessionCacheHits = 0;
 const sessionSince = Date.now();
+
+// Validation-result cache (keyed by block hash) so a refresh renders instantly
+// instead of re-decoding + re-validating every block. The block bytes stay in
+// OPFS (re-validatable); this memoises the deterministic result of validating a
+// specific hash we already verified locally. Header PoW/linkage is still checked
+// on every load — only the expensive per-block decode+validate is skipped.
+const RESULT_CAP = 400;
+let resultCache = {};
+try { resultCache = JSON.parse(localStorage.getItem('blockhealth.results') || '{}'); } catch { resultCache = {}; }
+function saveResults() {
+  if (!CACHE_ENABLED) return;
+  try {
+    const keys = Object.keys(resultCache);
+    if (keys.length > RESULT_CAP) {
+      keys.map((h) => [h, resultCache[h].ts || 0]).sort((a, b) => a[1] - b[1])
+        .slice(0, keys.length - RESULT_CAP).forEach(([h]) => delete resultCache[h]);
+    }
+    localStorage.setItem('blockhealth.results', JSON.stringify(resultCache));
+  } catch { /* quota / disabled */ }
+}
 function writeStatsSnapshot() {
   try {
     const done = [...blocks.values()].filter((r) => r.state === 'done');
@@ -423,7 +443,18 @@ function ingest(event) {
     if (!rec) {
       rec = { ...b, state: 'pending', result: null, el: null };
       blocks.set(b.hash, rec);
-      requestValidate(b.hash, b.height);
+      const cached = CACHE_ENABLED ? resultCache[b.hash] : null;
+      if (cached && cached.result) {
+        // already validated this exact hash — render instantly, skip the worker
+        rec.state = 'done'; rec.result = cached.result;
+        if (!sessionSeen.has(b.hash)) {
+          sessionSeen.add(b.hash);
+          sessionBlocks++; sessionTxs += cached.result.txCount; sessionBytes += cached.result.sizeBytes;
+          sessionCacheHits++;
+        }
+      } else {
+        requestValidate(b.hash, b.height);
+      }
     }
     const col = renderBlock(rec, isNew && known.size > 0);
     chain.appendChild(col);
@@ -515,6 +546,8 @@ function onValidated(hash, result, cacheHit) {
   const rec = blocks.get(hash);
   if (!rec) return;
   rec.state = 'done'; rec.result = result;
+  resultCache[hash] = { result, ts: Date.now() };
+  saveResults();
   if (!sessionSeen.has(hash)) {
     sessionSeen.add(hash);
     sessionBlocks++; sessionTxs += result.txCount; sessionBytes += result.sizeBytes;

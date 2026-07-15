@@ -298,6 +298,7 @@ $('cache-toggle').addEventListener('click', (e) => { if (e.target.id !== 'clear-
 $('cache-toggle').addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleCache(); } });
 $('clear-cache').addEventListener('click', async (e) => {
   e.stopPropagation();
+  try { localStorage.removeItem('blockhealth.results'); } catch {} // validation-result cache
   if (store) { await store.clear(); await renderCacheStats(); }
 });
 async function renderCacheStats() {
