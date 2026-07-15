@@ -304,6 +304,7 @@ const sessionSince = Date.now();
 // specific hash we already verified locally. Header PoW/linkage is still checked
 // on every load — only the expensive per-block decode+validate is skipped.
 const RESULT_CAP = 400;
+const RESULT_VERSION = 2; // bump when the worker's result shape changes, so stale cached results auto-refresh
 let resultCache = {};
 try { resultCache = JSON.parse(localStorage.getItem('blockhealth.results') || '{}'); } catch { resultCache = {}; }
 function saveResults() {
@@ -472,7 +473,7 @@ function ingest(event) {
       rec = { ...b, state: 'pending', result: null, el: null };
       blocks.set(b.hash, rec);
       const cached = CACHE_ENABLED ? resultCache[b.hash] : null;
-      if (cached && cached.result) {
+      if (cached && cached.result && cached.v === RESULT_VERSION) {
         // already validated this exact hash — render instantly, skip the worker
         rec.state = 'done'; rec.result = cached.result;
         recordClassification(b.hash, b.height, cached.result);
@@ -575,7 +576,7 @@ function onValidated(hash, result, cacheHit) {
   const rec = blocks.get(hash);
   if (!rec) return;
   rec.state = 'done'; rec.result = result;
-  resultCache[hash] = { result, ts: Date.now() };
+  resultCache[hash] = { result, ts: Date.now(), v: RESULT_VERSION };
   saveResults();
   recordClassification(hash, rec.height, result);
   if (!sessionSeen.has(hash)) {
