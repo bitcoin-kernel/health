@@ -127,6 +127,10 @@
   <p class="h2note">OP_RETURN outputs across the current window, by class. <a href="./protocols.html">What are these? →</a></p>
   <div class="breakdown" id="breakdown"><span class="empty">No data yet.</span></div>
 
+  <h2>Non-standard datacarrier <span style="font-size:.7rem;color:var(--muted);font-weight:400">— all-time</span></h2>
+  <p class="h2note" id="alltime-note">OP_RETURNs over the 80/83-byte standard, by protocol, across every block you've cached.</p>
+  <div class="breakdown" id="alltime"><span class="empty">No cached history yet.</span></div>
+
   <h2>Feed &amp; source</h2>
   <p class="h2note">Which NIP-333 publisher and relays the Blocks page follows. Changes apply when the Blocks page reloads.</p>
   <div class="panel">
@@ -226,6 +230,31 @@ function renderStats() {
   $('breakdown').innerHTML = chips.length ? chips.join('') : '<span class="empty">No OP_RETURN datacarrier outputs seen yet.</span>';
 }
 
+// ---- all-time non-standard datacarrier (from the persistent ledger) ----
+// ledger entry: [height, txCount, nonStandardTotal, [opnet,alkanes,runes,protostone,powme,bridge,padding]]
+const NS_ORDER = ['opnet', 'alkanes', 'runes', 'protostone', 'powme', 'bridge', 'padding'];
+function renderAllTime() {
+  let led = {};
+  try { led = JSON.parse(localStorage.getItem('blockhealth.classified') || '{}'); } catch { led = {}; }
+  const entries = Object.values(led);
+  const el = $('alltime');
+  if (!entries.length) { el.innerHTML = '<span class="empty">No cached history yet — browse the Blocks page to build it.</span>'; $('alltime-note').textContent = 'OP_RETURNs over the 80/83-byte standard, by protocol, across every block you\'ve cached.'; return; }
+  const per = Object.fromEntries(NS_ORDER.map((k) => [k, 0]));
+  let total = 0;
+  for (const e of entries) { total += e[2] || 0; (e[3] || []).forEach((v, i) => { per[NS_ORDER[i]] += v || 0; }); }
+  const named = NS_ORDER.reduce((s, k) => s + per[k], 0);
+  const plain = Math.max(0, total - named);
+  const chips = NS_ORDER.filter((k) => per[k] > 0).map((k) => {
+    const [icon, label, cls] = CHIP[k];
+    return `<span class="pchip ${cls}">${icon} ${fmt(per[k])} ${label}</span>`;
+  });
+  if (plain > 0) chips.push(`<span class="pchip data">· ${fmt(plain)} plain data</span>`);
+  el.innerHTML = chips.length ? chips.join('') : '<span class="empty">No non-standard datacarrier in your cached blocks.</span>';
+  const heights = entries.map((e) => e[0]);
+  $('alltime-note').innerHTML = `<b>${fmt(total)}</b> non-standard OP_RETURNs across <b>${fmt(entries.length)}</b> cached blocks `
+    + `(heights #${fmt(Math.min(...heights))}–#${fmt(Math.max(...heights))})${entries.length >= 5000 ? ', capped at the most recent 5,000' : ''}.`;
+}
+
 // ---- config form ----
 function loadConfig() {
   let cfg = {};
@@ -299,8 +328,9 @@ $('cache-toggle').addEventListener('click', (e) => { if (e.target.id !== 'clear-
 $('cache-toggle').addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleCache(); } });
 $('clear-cache').addEventListener('click', async (e) => {
   e.stopPropagation();
-  try { localStorage.removeItem('blockhealth.results'); } catch {} // validation-result cache
+  try { localStorage.removeItem('blockhealth.results'); localStorage.removeItem('blockhealth.classified'); } catch {} // result cache + all-time ledger
   if (store) { await store.clear(); await renderCacheStats(); }
+  renderAllTime();
 });
 async function renderCacheStats() {
   const el = $('cache-stats');
@@ -315,12 +345,16 @@ async function renderCacheStats() {
 }
 
 // live updates if the Blocks page is open in another tab
-window.addEventListener('storage', (e) => { if (e.key === 'blockhealth.stats') { renderStats(); renderCacheStats(); } });
-setInterval(() => { renderStats(); renderCacheStats(); }, 5000);
+window.addEventListener('storage', (e) => {
+  if (e.key === 'blockhealth.stats') { renderStats(); renderCacheStats(); }
+  if (e.key === 'blockhealth.classified') renderAllTime();
+});
+setInterval(() => { renderStats(); renderCacheStats(); renderAllTime(); }, 5000);
 loadConfig();
 renderCacheToggle();
 renderStats();
 renderCacheStats();
+renderAllTime();
 </script>
 </body>
 </html>

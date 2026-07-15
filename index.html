@@ -315,6 +315,32 @@ function saveResults() {
     localStorage.setItem('blockhealth.results', JSON.stringify(resultCache));
   } catch { /* quota / disabled */ }
 }
+
+// Persistent per-block ledger for all-time NON-STANDARD datacarrier totals — the
+// OP_RETURN outputs over the 80/83-byte standard, which is the whole point.
+// Compact: hash -> [height, txCount, nonStandardTotal, [opnet, alkanes, runes,
+// protostone, powme, bridge, padding]]  (per-class non-standard counts).
+// Keyed by hash so re-recording a block is idempotent (never double-counts).
+const CLASS_CAP = 5000;
+let classified = {};
+try { classified = JSON.parse(localStorage.getItem('blockhealth.classified') || '{}'); } catch { classified = {}; }
+let classTimer = null;
+function persistClassified() {
+  clearTimeout(classTimer);
+  classTimer = setTimeout(() => { try { localStorage.setItem('blockhealth.classified', JSON.stringify(classified)); } catch { /* quota */ } }, 400);
+}
+function recordClassification(hash, height, result) {
+  if (!CACHE_ENABLED || !result) return;
+  const h = result.health, n = h.ns || {};
+  classified[hash] = [height, result.txCount, h.nonStandard || 0,
+    [n.opnet || 0, n.alkanes || 0, n.runes || 0, n.protostone || 0, n.powme || 0, n.bridge || 0, n.padding || 0]];
+  const keys = Object.keys(classified);
+  if (keys.length > CLASS_CAP) {
+    keys.map((k) => [k, classified[k][0]]).sort((a, b) => a[1] - b[1]) // evict lowest heights (oldest)
+      .slice(0, keys.length - CLASS_CAP).forEach(([k]) => delete classified[k]);
+  }
+  persistClassified();
+}
 function writeStatsSnapshot() {
   try {
     const done = [...blocks.values()].filter((r) => r.state === 'done');
@@ -447,6 +473,7 @@ function ingest(event) {
       if (cached && cached.result) {
         // already validated this exact hash — render instantly, skip the worker
         rec.state = 'done'; rec.result = cached.result;
+        recordClassification(b.hash, b.height, cached.result);
         if (!sessionSeen.has(b.hash)) {
           sessionSeen.add(b.hash);
           sessionBlocks++; sessionTxs += cached.result.txCount; sessionBytes += cached.result.sizeBytes;
@@ -548,6 +575,7 @@ function onValidated(hash, result, cacheHit) {
   rec.state = 'done'; rec.result = result;
   resultCache[hash] = { result, ts: Date.now() };
   saveResults();
+  recordClassification(hash, rec.height, result);
   if (!sessionSeen.has(hash)) {
     sessionSeen.add(hash);
     sessionBlocks++; sessionTxs += result.txCount; sessionBytes += result.sizeBytes;

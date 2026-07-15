@@ -119,6 +119,8 @@ function classifyOpReturn(spk) {
 function measureHealth(block, codec) {
   let outputs = 0, over80 = 0, over83 = 0, maxData = 0, maxSpk = 0, witnessCommitments = 0;
   let alkanes = 0, runes = 0, protostone = 0, opnet = 0, bridge = 0, padding = 0, paddingBytes = 0, powme = 0; // disjoint metaprotocol tallies
+  let nonStandard = 0; // OP_RETURN outputs over the 80-byte data / 83-byte script standard
+  const ns = { opnet: 0, alkanes: 0, runes: 0, protostone: 0, powme: 0, bridge: 0, padding: 0 }; // non-standard, per class
   const examples = [];
   block.transactions.forEach((tx, ti) => {
     tx.outputs.forEach((o, vout) => {
@@ -143,13 +145,17 @@ function measureHealth(block, codec) {
       const o83 = spkBytes > 83;
       if (o80) over80++;
       if (o83) over83++;
-      if ((o80 || o83) && examples.length < 12) {
-        examples.push({ txid: codec.txid(tx), vout, dataBytes, spkBytes, coinbase: ti === 0, proto });
+      if (o80 || o83) { // non-standard datacarrier — the health concern
+        nonStandard++;
+        if (ns[proto] !== undefined) ns[proto]++;
+        if (examples.length < 12) {
+          examples.push({ txid: codec.txid(tx), vout, dataBytes, spkBytes, coinbase: ti === 0, proto });
+        }
       }
     });
   });
   examples.sort((a, b) => (b.dataBytes ?? b.spkBytes) - (a.dataBytes ?? a.spkBytes));
-  return { outputs, over80, over83, maxData, maxSpk, witnessCommitments, alkanes, runes, protostone, opnet, bridge, padding, paddingBytes, powme, examples };
+  return { outputs, over80, over83, nonStandard, ns, maxData, maxSpk, witnessCommitments, alkanes, runes, protostone, opnet, bridge, padding, paddingBytes, powme, examples };
 }
 
 const failures = (verdict) =>
