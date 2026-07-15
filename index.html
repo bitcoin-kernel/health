@@ -183,7 +183,9 @@
   .card .miner .ctag { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .7rem;
     color: var(--muted); background: var(--stat-box-bg); border: 1px solid var(--border);
     padding: .12rem .4rem; border-radius: 4px; word-break: break-all; }
-  .protos-line { display: flex; flex-wrap: wrap; gap: .45rem; margin-bottom: 1.3rem; }
+  .protos-line { display: flex; flex-wrap: wrap; gap: .45rem; margin-bottom: .5rem; }
+  .dc-footprint { font-size: .78rem; color: var(--muted); margin-bottom: 1.3rem; font-variant-numeric: tabular-nums; }
+  .dc-footprint b { color: #cdd2ec; font-weight: 600; }
   .protos-line .pchip { font-size: .78rem; padding: .22rem .55rem; }
   .pchip.data { background: rgba(148,163,184,.16); color: #b6bfd6; }
   td .ptag { font-size: .68rem; font-weight: 700; padding: .08rem .34rem; border-radius: 4px; }
@@ -669,6 +671,7 @@ function renderDetail(rec) {
       ${(() => { const plain = h.outputs - h.opnet - h.alkanes - h.runes - h.protostone - h.bridge - (h.powme || 0) - (h.padding || 0); return plain > 0 ? `<span class="pchip data">· ${fmt(plain)} plain data</span>` : ''; })()}
       ${h.outputs === 0 ? `<span style="color:var(--muted);font-size:.82rem">no OP_RETURN datacarrier outputs</span>` : ''}
     </div>
+    ${h.dcTxs ? `<div class="dc-footprint">datacarrier footprint · <b>${(100 * h.dcTxs / r.txCount).toFixed(0)}%</b> of txs · <b>${(100 * h.dcBytes / r.sizeBytes).toFixed(0)}%</b> of block space</div>` : ''}
 
     <div class="checks">
       ${chk(rec.powOk, 'header proof-of-work')}

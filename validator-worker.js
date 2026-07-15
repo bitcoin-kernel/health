@@ -116,18 +116,37 @@ function classifyOpReturn(spk) {
 // Datacarrier health across every OP_RETURN output in the block.
 // The coinbase witness-commitment OP_RETURN is protocol overhead, not
 // user data, so it's counted separately and never flagged oversize.
+// Exact serialized byte length of a decoded tx, computed from its fields —
+// far cheaper than re-encoding through the schema codec (which noticeably slows
+// cold validation when done per datacarrier tx).
+const varintLen = (n) => (n < 0xfd ? 1 : n <= 0xffff ? 3 : n <= 0xffffffff ? 5 : 9);
+function txByteLen(tx) {
+  const hasWitness = tx.witness && tx.witness.some((w) => w && w.length);
+  let n = 4 + varintLen(tx.inputs.length) + varintLen(tx.outputs.length) + 4; // version + counts + locktime
+  for (const inp of tx.inputs) n += 36 + varintLen(inp.scriptSig.length / 2) + inp.scriptSig.length / 2 + 4;
+  for (const o of tx.outputs) n += 8 + varintLen(o.scriptPubKey.length / 2) + o.scriptPubKey.length / 2;
+  if (hasWitness) {
+    n += 2; // segwit marker + flag
+    for (const w of tx.witness) { const items = w || []; n += varintLen(items.length); for (const it of items) n += varintLen(it.length / 2) + it.length / 2; }
+  }
+  return n;
+}
+
 function measureHealth(block, codec) {
   let outputs = 0, over80 = 0, over83 = 0, maxData = 0, maxSpk = 0, witnessCommitments = 0;
   let alkanes = 0, runes = 0, protostone = 0, opnet = 0, bridge = 0, padding = 0, paddingBytes = 0, powme = 0; // disjoint metaprotocol tallies
   let nonStandard = 0; // OP_RETURN outputs over the 80-byte data / 83-byte script standard
   const ns = { opnet: 0, alkanes: 0, runes: 0, protostone: 0, powme: 0, bridge: 0, padding: 0 }; // non-standard, per class
+  let dcTxs = 0, dcBytes = 0; // transactions carrying datacarrier, and their total serialized size
   const examples = [];
   block.transactions.forEach((tx, ti) => {
+    let isDc = false;
     tx.outputs.forEach((o, vout) => {
       const spk = o.scriptPubKey;
       if (!spk.startsWith('6a')) return;
       if (isWitnessCommitment(spk)) { witnessCommitments++; return; }
       outputs++;
+      isDc = true;
       const proto = classifyOpReturn(spk);
       if (proto === 'opnet') opnet++;
       else if (proto === 'alkanes') alkanes++;
@@ -153,9 +172,10 @@ function measureHealth(block, codec) {
         }
       }
     });
+    if (isDc) { dcTxs++; dcBytes += txByteLen(tx); }
   });
   examples.sort((a, b) => (b.dataBytes ?? b.spkBytes) - (a.dataBytes ?? a.spkBytes));
-  return { outputs, over80, over83, nonStandard, ns, maxData, maxSpk, witnessCommitments, alkanes, runes, protostone, opnet, bridge, padding, paddingBytes, powme, examples };
+  return { outputs, over80, over83, nonStandard, ns, maxData, maxSpk, witnessCommitments, alkanes, runes, protostone, opnet, bridge, padding, paddingBytes, powme, dcTxs, dcBytes, examples };
 }
 
 const failures = (verdict) =>
