@@ -299,7 +299,11 @@ try { CFG = JSON.parse(localStorage.getItem('blockhealth.config') || '{}'); } ca
   const qs = new URLSearchParams(location.search);
   const qPeer = qs.get('peer'), qRoom = qs.get('room');
   if (qPeer && /^wss?:\/\//.test(qPeer)) {
-    CFG = { ...CFG, webrtc: { signalUrl: qPeer, ...(qRoom && /^[a-f0-9]{8,128}$/.test(qRoom) ? { room: qRoom } : {}) } };
+    const w = { signalUrl: qPeer };
+    if (qRoom && /^[a-f0-9]{8,128}$/.test(qRoom)) w.room = qRoom;
+    const qTurn = qs.get('turn'); // optional TURN for reliable NAT / cross-browser traversal
+    if (qTurn && /^turns?:/.test(qTurn)) { w.turn = qTurn; const tu = qs.get('tu'), tc = qs.get('tc'); if (tu) w.turnUser = tu; if (tc) w.turnCred = tc; }
+    CFG = { ...CFG, webrtc: w };
     // persist so it shows as enabled in Settings and survives reloads (clear it there to turn off)
     try { localStorage.setItem('blockhealth.config', JSON.stringify(CFG)); } catch {}
   }
