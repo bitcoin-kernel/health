@@ -243,6 +243,7 @@
   </nav>
   <span class="spacer"></span>
   <span class="status"><span class="pulse" id="pulse"></span><span id="statusText">connecting…</span></span>
+  <a class="status" id="peerind" href="./settings.html" style="display:none; color:#7fe3ff; text-decoration:none"></a>
 </header>
 
 <div class="wrap">
@@ -293,7 +294,11 @@ try { CFG = JSON.parse(localStorage.getItem('blockhealth.config') || '{}'); } ca
 {
   const qs = new URLSearchParams(location.search);
   const qPeer = qs.get('peer'), qRoom = qs.get('room');
-  if (qPeer && /^wss?:\/\//.test(qPeer)) CFG = { ...CFG, webrtc: { signalUrl: qPeer, ...(qRoom && /^[a-f0-9]{8,128}$/.test(qRoom) ? { room: qRoom } : {}) } };
+  if (qPeer && /^wss?:\/\//.test(qPeer)) {
+    CFG = { ...CFG, webrtc: { signalUrl: qPeer, ...(qRoom && /^[a-f0-9]{8,128}$/.test(qRoom) ? { room: qRoom } : {}) } };
+    // persist so it shows as enabled in Settings and survives reloads (clear it there to turn off)
+    try { localStorage.setItem('blockhealth.config', JSON.stringify(CFG)); } catch {}
+  }
 }
 const PUBKEY = (typeof CFG.publisher === 'string' && /^[0-9a-f]{64}$/.test(CFG.publisher)) ? CFG.publisher : DEFAULT_PUBKEY;
 const RELAYS = (Array.isArray(CFG.relays) && CFG.relays.length) ? CFG.relays.filter((r) => /^wss?:\/\//.test(r)) : DEFAULT_RELAYS;
@@ -727,7 +732,11 @@ if (CFG.webrtc && CFG.webrtc.signalUrl && opfsAvailable()) {
   peerSource = new PeerSource({
     signalUrl: CFG.webrtc.signalUrl, room: CFG.webrtc.room || 'b17c0100b10c48ea1710',
     store: new BlockStore(),
-    onStatus: (s) => { try { localStorage.setItem('blockhealth.peers', JSON.stringify({ ts: Date.now(), ...s })); } catch {} },
+    onStatus: (s) => {
+      try { localStorage.setItem('blockhealth.peers', JSON.stringify({ ts: Date.now(), ...s })); } catch {}
+      const el = $('peerind');
+      if (el) { el.style.display = ''; el.title = 'WebRTC peering (Settings)'; el.textContent = `⇄ ${s.connected} peer${s.connected === 1 ? '' : 's'}${s.syncing ? ' · catching up…' : ''}`; }
+    },
   });
   peerSource.start();
   window.peerSource = peerSource; // exposed for two-tab testing
