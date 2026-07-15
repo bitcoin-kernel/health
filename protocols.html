@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>protocols — block·health</title>
+<meta name="description" content="How block·health classifies Bitcoin OP_RETURN datacarrier outputs: OP_NET, Alkanes, Runes, ProofOfWork.Me, bridge deposits, padding and plain data.">
+<link rel="canonical" href="https://bitcoin-kernel.com/health/protocols.html">
+<meta name="theme-color" content="#11131f">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='5' fill='%2311131f'/%3E%3Cpath d='M8 13l8-4 8 4-8 4z' fill='%23f7931a'/%3E%3Cpath d='M8 13v8l8 4v-8z' fill='%23c76f0a'/%3E%3Cpath d='M24 13v8l-8 4v-8z' fill='%239c5606'/%3E%3C/svg%3E">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="block·health">
+<meta property="og:title" content="Datacarrier protocols — block·health">
+<meta property="og:description" content="How block·health classifies Bitcoin OP_RETURN datacarrier: OP_NET, Alkanes, Runes, ProofOfWork.Me, bridge deposits, padding and plain data — all decoded locally.">
+<meta property="og:url" content="https://bitcoin-kernel.com/health/protocols.html">
+<meta property="og:image" content="https://bitcoin-kernel.com/health/og.png?v=1">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Datacarrier protocols — block·health">
+<meta name="twitter:image" content="https://bitcoin-kernel.com/health/og.png?v=1">
+<style>
+  :root {
+    --bg: #11131f; --nav-bg: #1d1f31; --panel-bg: #24273e; --stat-box-bg: #0b1018;
+    --border: #2d3348; --fg: #ffffff; --muted: #8b93b0; --link: #00ddff; --accent: #f7931a;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--fg); min-height: 100vh;
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    -webkit-font-smoothing: antialiased; }
+  a { color: var(--link); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  header.nav { display: flex; align-items: center; gap: .4rem; padding: .85rem 1.4rem;
+    background: var(--nav-bg); border-bottom: 1px solid var(--border); }
+  header.nav .brand { font-size: 1.15rem; font-weight: 600; color: var(--fg); }
+  header.nav .brand:hover { text-decoration: none; }
+  header.nav .brand .dot { color: var(--accent); }
+  header.nav .menu { display: flex; gap: .3rem; margin-left: .4rem; }
+  header.nav .menu a { color: var(--muted); font-size: .84rem; padding: .25rem .6rem; border-radius: 6px; }
+  header.nav .menu a:hover { color: var(--fg); background: #ffffff0d; text-decoration: none; }
+  header.nav .menu a.active { color: var(--fg); background: #ffffff14; }
+
+  .wrap { max-width: 820px; margin: 0 auto; padding: 2.4rem 1.4rem 4rem; }
+  h1 { font-size: 1.9rem; margin: 0 0 .4rem; letter-spacing: -.01em; }
+  .tagline { color: var(--muted); font-size: 1.02rem; margin: 0 0 2rem; line-height: 1.55; }
+  h2 { font-size: 1.1rem; margin: 2.4rem 0 .8rem; }
+  p { line-height: 1.66; color: #dfe3f2; margin: .7rem 0; }
+  li { line-height: 1.6; color: #dfe3f2; margin: .35rem 0; }
+  code { background: var(--stat-box-bg); padding: .12rem .4rem; border-radius: 4px; color: #cfe; font-size: .86em;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .note { color: var(--muted); font-size: .9rem; line-height: 1.6; }
+
+  /* class cards */
+  .cards { display: grid; gap: .9rem; margin: 1.4rem 0 .5rem; }
+  .card { background: var(--panel-bg); border: 1px solid var(--border); border-radius: 12px; padding: 1rem 1.2rem; }
+  .card .top { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; margin-bottom: .55rem; }
+  .chip { font-size: .82rem; font-weight: 700; letter-spacing: .02em; padding: .2rem .55rem; border-radius: 6px; white-space: nowrap; }
+  .chip.opnet { background: rgba(143,180,255,.2); color: #b3ccff; }
+  .chip.alk   { background: rgba(94,234,212,.18); color: #7ff0dc; }
+  .chip.runes { background: rgba(183,148,246,.2); color: #cbb4ff; }
+  .chip.proto { background: rgba(148,163,184,.2); color: #cbd3e6; }
+  .chip.powme { background: rgba(247,147,26,.18); color: #f7b955; }
+  .chip.bridge{ background: rgba(242,163,199,.2); color: #f6b9d3; }
+  .chip.pad   { background: rgba(120,130,150,.16); color: #98a2b8; }
+  .chip.data  { background: rgba(148,163,184,.14); color: #b6bfd6; }
+  .conf { font-size: .66rem; text-transform: uppercase; letter-spacing: .06em; font-weight: 700;
+    padding: .16rem .45rem; border-radius: 5px; }
+  .conf.marker { background: rgba(26,158,75,.22); color: #6fe6a0; }
+  .conf.heur { background: rgba(224,168,15,.2); color: #f4d06a; }
+  .card .how { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .78rem; color: #c7cbe4; margin: .1rem 0 .5rem; }
+  .card .desc { margin: .2rem 0 .4rem; font-size: .92rem; }
+  .card .ex { font-size: .8rem; color: var(--muted); margin: .3rem 0 0; word-break: break-all; }
+  .card .ex a { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .95em; }
+
+  footer { color: var(--muted); font-size: .82rem; line-height: 1.6; margin-top: 2.6rem;
+    border-top: 1px solid var(--border); padding-top: 1.3rem; }
+</style>
+</head>
+<body>
+<header class="nav">
+  <a class="brand" href="./">block<span class="dot">·</span>health</a>
+  <nav class="menu">
+    <a href="./">Blocks</a>
+    <a href="./protocols.html" class="active">Protocols</a>
+    <a href="./about.html">About</a>
+  </nav>
+</header>
+
+<div class="wrap">
+  <h1>Datacarrier protocols</h1>
+  <p class="tagline">Every <code>OP_RETURN</code> a block carries is classified here — <b>decoded locally in your
+    browser</b>, straight from the raw block bytes, with no external indexer trusted. This is the legend for the
+    badges you see on each block, and a reference for what's actually filling Bitcoin's datacarrier outputs.</p>
+
+  <h2>How it works</h2>
+  <ul>
+    <li>Classification is <b>per output</b> — a transaction with several <code>OP_RETURN</code>s gets each one labelled independently.</li>
+    <li>The labels are <b>mutually exclusive</b>; each output matches the first class below that fits.</li>
+    <li>The coinbase <b>witness commitment</b> (<code>6a24aa21a9ed…</code>) is protocol overhead — counted separately, never as datacarrier.</li>
+    <li>This is <b>orthogonal to the health metric</b> (outputs over the historical 80-byte data / 83-byte script standard): a block can be "bloated" <em>and</em> this tells you what the bloat is.</li>
+  </ul>
+
+  <h2>The classes</h2>
+  <div class="cards">
+
+    <div class="card">
+      <div class="top"><span class="chip opnet">◈ OP_NET</span><span class="conf marker">marker</span>
+        <a href="https://opnet.org" target="_blank" rel="noopener">opnet.org ↗</a></div>
+      <div class="how">6a 58 — OP_RETURN OP_8</div>
+      <div class="desc">OP_NET epoch <b>challenge submissions</b> — SHA-1 proof-of-work solutions for its smart-contract layer.
+        The payload carries the solver's account key and the solution preimage.</div>
+      <div class="ex">Example: <a href="https://mempool.guide/tx/658b32af4687d1cb9e5cec6779bcfe74348fd2836a0c009dc868b87280251834" target="_blank" rel="noopener">658b32af…251834</a></div>
+    </div>
+
+    <div class="card">
+      <div class="top"><span class="chip alk">⚗ Alkanes</span><span class="conf marker">marker</span>
+        <a href="https://github.com/kungfuflex/alkanes-rs" target="_blank" rel="noopener">alkanes-rs ↗</a></div>
+      <div class="how">6a 5d runestone · Protocol tag 16383 · protocol id 1</div>
+      <div class="desc">An Alkanes metaprotocol message packed into a runestone's <code>16383</code> Protocol fields
+        (15 payload bytes per <code>u128</code>). Invisible to Runes indexers — they ignore the odd tag — but decoded here.</div>
+      <div class="ex">Example: <a href="https://mempool.guide/tx/8bfd8d36c50797e631125e6184a097091c817fdf5ffa7c76b64f8009a7e0bd9f" target="_blank" rel="noopener">8bfd8d36…bd9f</a></div>
+    </div>
+
+    <div class="card">
+      <div class="top"><span class="chip proto">⬡ protostone</span><span class="conf marker">marker</span></div>
+      <div class="how">6a 5d runestone · Protocol tag 16383 · protocol id ≠ 1</div>
+      <div class="desc">A <a href="https://github.com/kungfuflex/alkanes-rs" target="_blank" rel="noopener">protorunes</a> protostone
+        for a protocol other than Alkanes. Detected as a protostone; the specific protocol isn't decoded.</div>
+    </div>
+
+    <div class="card">
+      <div class="top"><span class="chip runes">ᚱ Runes</span><span class="conf marker">marker</span>
+        <a href="https://docs.ordinals.com/runes.html" target="_blank" rel="noopener">runes spec ↗</a></div>
+      <div class="how">6a 5d — OP_RETURN OP_13, no 16383 field</div>
+      <div class="desc">A plain runestone: a Runes etch, mint, or transfer with no metaprotocol payload riding along.</div>
+    </div>
+
+    <div class="card">
+      <div class="top"><span class="chip powme">⛏ ProofOfWork.Me</span><span class="conf marker">marker</span>
+        <a href="https://proofofwork.me" target="_blank" rel="noopener">proofofwork.me ↗</a></div>
+      <div class="how">payload starts pwt1: / pwm1: / pwid1: / pwr1:</div>
+      <div class="desc">A social / token / mail system on legacy Bitcoin, using 546-sat "proof" payments.
+        <code>pwt1:</code> credits, <code>pwm1:</code> mail &amp; bonds, <code>pwid1:</code> identities, <code>pwr1:</code> registry.</div>
+      <div class="ex">Example: <a href="https://mempool.guide/tx/bb4a05ad31a9ed0adb82c106a6b74bdc6403f1f83744bb73eac3a758c4dff648" target="_blank" rel="noopener">bb4a05ad…f648</a> (Inception Bond + credit transfer)</div>
+    </div>
+
+    <div class="card">
+      <div class="top"><span class="chip bridge">⇄ bridge</span><span class="conf heur">heuristic</span></div>
+      <div class="how">printable ASCII · 0x&lt;hex&gt; address and/or depositor= field</div>
+      <div class="desc">A custodial / bridge <b>deposit memo</b> — e.g. <code>0x&lt;hex&gt;|depositor=bc1q…|</code>: an EVM-style
+        destination plus a refund address. This is a <b>heuristic</b>, not a magic byte, so it may miss uncommon
+        formats and it names no specific operator.</div>
+      <div class="ex">Example: <a href="https://mempool.guide/tx/d2819802477eeee6d0272d037731f4830e91eaee1958013e75adc6231acc56d0" target="_blank" rel="noopener">d2819802…56d0</a></div>
+    </div>
+
+    <div class="card">
+      <div class="top"><span class="chip pad">⌀ padding</span><span class="conf marker">marker</span></div>
+      <div class="how">non-marker OP_RETURN, payload ≥ 8 bytes, entirely 0x00</div>
+      <div class="desc">A zero-filled <b>reservation</b> output that carries no information (Alkanes transactions often emit
+        one). Split out so it doesn't inflate the data count; the block detail reports total bytes spent on padding.</div>
+      <div class="ex">Example: <a href="https://mempool.guide/tx/90f47c9913edd98c8e2eeed2b6ecd9338a61ca23db0222067876068c46f57ea0" target="_blank" rel="noopener">90f47c99…7ea0</a> (1,000 bytes of zeros)</div>
+    </div>
+
+    <div class="card">
+      <div class="top"><span class="chip data">· plain data</span></div>
+      <div class="how">anything else</div>
+      <div class="desc">Genuinely uncategorised bytes: timestamps, raw commitments, and protocols we don't yet recognise.</div>
+    </div>
+
+  </div>
+
+  <h2>Known limits</h2>
+  <ul>
+    <li><b>bridge</b> is the only heuristic; the rest key on unambiguous markers. It's recall-limited and attributes no operator.</li>
+    <li><b>Ordinals / inscriptions are out of scope</b> — they live in the taproot <em>witness</em>, not <code>OP_RETURN</code>, so this datacarrier scan doesn't see them.</li>
+    <li>The full write-up with detection details lives in
+      <a href="https://github.com/bitcoin-kernel/health/issues/1" target="_blank" rel="noopener">issue #1</a>.</li>
+  </ul>
+
+  <footer>
+    Bitcoin headers are self-certifying, so no relay, publisher, or block source is trusted — every claim is
+    re-checked locally. See <a href="./about.html">how it works</a> or the
+    <a href="https://github.com/bitcoin-kernel/health" target="_blank" rel="noopener">source</a>.
+  </footer>
+</div>
+</body>
+</html>
