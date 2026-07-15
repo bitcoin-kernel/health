@@ -198,7 +198,7 @@
         <input type="text" id="sig" spellcheck="false" autocomplete="off" placeholder="wss://your.pod/.webrtc">
         <label for="room">Room</label>
         <input type="text" id="room" spellcheck="false" autocomplete="off" placeholder="b17c0100b10c48ea1710 (hex, 8–128 chars)">
-        <div class="row" style="margin-top:.7rem"><button class="primary" id="save-peer">Save peering</button><span class="saved" id="saved-peer">saved ✓</span></div>
+        <div class="row" style="margin-top:.7rem"><button class="primary" id="save-peer">Save peering</button><button id="copy-peer">Copy peering link</button><span class="saved" id="saved-peer">saved ✓</span></div>
         <div class="cache-stats" id="peer-status" style="margin-top:.6rem">—</div>
       </div>
     </div>
@@ -445,6 +445,18 @@ $('save-peer').addEventListener('click', () => {
   writeCfg(cfg);
   $('saved-peer').classList.add('show'); setTimeout(() => $('saved-peer').classList.remove('show'), 1600);
   renderPeerStatus();
+});
+$('copy-peer').addEventListener('click', async () => {
+  const signalUrl = $('sig').value.trim();
+  if (!/^wss?:\/\//.test(signalUrl)) { $('peer-status').textContent = 'Set a wss:// signaling server first.'; return; }
+  let room = $('room').value.trim();
+  if (!/^[a-f0-9]{8,128}$/.test(room)) { // mint a fresh hex room so shared sessions don't collide
+    room = Array.from(crypto.getRandomValues(new Uint8Array(10)), (b) => b.toString(16).padStart(2, '0')).join('');
+    $('room').value = room;
+  }
+  const link = `${location.origin}${location.pathname.replace(/settings\.html$/, '')}?peer=${encodeURIComponent(signalUrl)}&room=${room}`;
+  try { await navigator.clipboard.writeText(link); $('peer-status').innerHTML = 'Link copied — share it, both browsers peer up on open.'; }
+  catch { $('peer-status').textContent = link; } // clipboard blocked → show it to copy manually
 });
 function renderPeerStatus() {
   const el = $('peer-status');

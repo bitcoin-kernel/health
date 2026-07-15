@@ -287,6 +287,14 @@ const DEFAULT_PUBKEY = 'cccccc0a8338a4aba51691f309f2f892c6c58f655a1ec3fc30522c89
 // config is editable on the Settings page (persisted in localStorage); fall back to defaults
 let CFG = {};
 try { CFG = JSON.parse(localStorage.getItem('blockhealth.config') || '{}'); } catch { CFG = {}; }
+// Shareable peering via query string (session-only, never persisted): a link like
+// ?peer=wss://your.pod/.webrtc&room=<hex> auto-configures peering without the
+// server URL ever living in the repo or a visitor's saved config.
+{
+  const qs = new URLSearchParams(location.search);
+  const qPeer = qs.get('peer'), qRoom = qs.get('room');
+  if (qPeer && /^wss?:\/\//.test(qPeer)) CFG = { ...CFG, webrtc: { signalUrl: qPeer, ...(qRoom && /^[a-f0-9]{8,128}$/.test(qRoom) ? { room: qRoom } : {}) } };
+}
 const PUBKEY = (typeof CFG.publisher === 'string' && /^[0-9a-f]{64}$/.test(CFG.publisher)) ? CFG.publisher : DEFAULT_PUBKEY;
 const RELAYS = (Array.isArray(CFG.relays) && CFG.relays.length) ? CFG.relays.filter((r) => /^wss?:\/\//.test(r)) : DEFAULT_RELAYS;
 const CACHE_ENABLED = CFG.cache !== false; // opt-out; blocks are cached in OPFS by default
