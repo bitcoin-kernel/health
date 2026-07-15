@@ -237,6 +237,7 @@
     <a href="./" class="active">Blocks</a>
     <a href="./protocols.html">Protocols</a>
     <a href="./about.html">About</a>
+    <a href="./settings.html">Settings</a>
   </nav>
   <span class="spacer"></span>
   <span class="status"><span class="pulse" id="pulse"></span><span id="statusText">connecting…</span></span>
@@ -277,12 +278,40 @@
 import { Codec } from './engine/codec/codec.js';
 import { verifyNostrEvent } from './engine/codec/nostr.js';
 
-const RELAYS = ['wss://relay.damus.io', 'wss://nos.lol', 'wss://relay.primal.net'];
-const PUBKEY = 'cccccc0a8338a4aba51691f309f2f892c6c58f655a1ec3fc30522c894c166d9c';
+const DEFAULT_RELAYS = ['wss://relay.damus.io', 'wss://nos.lol', 'wss://relay.primal.net'];
+const DEFAULT_PUBKEY = 'cccccc0a8338a4aba51691f309f2f892c6c58f655a1ec3fc30522c894c166d9c';
+// config is editable on the Settings page (persisted in localStorage); fall back to defaults
+let CFG = {};
+try { CFG = JSON.parse(localStorage.getItem('blockhealth.config') || '{}'); } catch { CFG = {}; }
+const PUBKEY = (typeof CFG.publisher === 'string' && /^[0-9a-f]{64}$/.test(CFG.publisher)) ? CFG.publisher : DEFAULT_PUBKEY;
+const RELAYS = (Array.isArray(CFG.relays) && CFG.relays.length) ? CFG.relays.filter((r) => /^wss?:\/\//.test(r)) : DEFAULT_RELAYS;
 const KIND = 33333;
 const NETWORK = 'btc';          // NIP-333 d-tag
 const HEADER_HEX = 160;
 const POLL_MS = 30000;
+
+// session-cumulative counters + a stats snapshot the Settings page reads
+const sessionSeen = new Set();
+let sessionBlocks = 0, sessionTxs = 0, sessionBytes = 0;
+const sessionSince = Date.now();
+function writeStatsSnapshot() {
+  try {
+    const done = [...blocks.values()].filter((r) => r.state === 'done');
+    const sum = (f) => done.reduce((s, r) => s + f(r.result.health), 0);
+    const t = {
+      outputs: sum((h) => h.outputs), opnet: sum((h) => h.opnet), alkanes: sum((h) => h.alkanes),
+      runes: sum((h) => h.runes), protostone: sum((h) => h.protostone), powme: sum((h) => h.powme),
+      bridge: sum((h) => h.bridge), padding: sum((h) => h.padding), paddingBytes: sum((h) => h.paddingBytes),
+      witnessCommitments: sum((h) => h.witnessCommitments), over: sum((h) => Math.max(h.over83, h.over80)),
+    };
+    t.plain = t.outputs - t.opnet - t.alkanes - t.runes - t.protostone - t.powme - t.bridge - t.padding;
+    localStorage.setItem('blockhealth.stats', JSON.stringify({
+      ts: Date.now(), tip: tipHeight, validated: done.length, windowSize: blocks.size,
+      feedAt: lastEventAt, publisher: PUBKEY, relays: RELAYS, network: NETWORK, totals: t,
+      session: { blocks: sessionBlocks, txs: sessionTxs, bytes: sessionBytes, since: sessionSince },
+    }));
+  } catch { /* storage disabled / quota — stats are best-effort */ }
+}
 
 const $ = (id) => document.getElementById(id);
 const fmt = (n) => n.toLocaleString('en-US');
@@ -485,6 +514,10 @@ function onValidated(hash, result) {
   const rec = blocks.get(hash);
   if (!rec) return;
   rec.state = 'done'; rec.result = result;
+  if (!sessionSeen.has(hash)) {
+    sessionSeen.add(hash);
+    sessionBlocks++; sessionTxs += result.txCount; sessionBytes += result.sizeBytes;
+  }
   if (rec.el) paintFace(rec.el, rec);
   refreshSummary();
   if (selected === hash) renderDetail(rec);
@@ -507,6 +540,7 @@ function refreshSummary() {
   $('s-opnet').textContent = done.length ? fmt(sum((h) => h.opnet)) : '—';
   $('s-alk').textContent = done.length ? fmt(sum((h) => h.alkanes)) : '—';
   $('s-runes').textContent = done.length ? fmt(sum((h) => h.runes)) : '—';
+  writeStatsSnapshot();
 }
 
 function refreshAge() {
