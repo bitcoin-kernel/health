@@ -77,8 +77,14 @@
 
   .toggle { display: flex; align-items: flex-start; gap: .8rem; padding: .8rem 0; border-top: 1px solid var(--border); }
   .toggle:first-child { border-top: none; }
-  .sw { width: 38px; height: 22px; border-radius: 12px; background: #2c3346; position: relative; flex: 0 0 auto; margin-top: .1rem; }
-  .sw::after { content: ""; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: #6b7488; }
+  .sw { width: 38px; height: 22px; border-radius: 12px; background: #2c3346; position: relative; flex: 0 0 auto; margin-top: .1rem;
+    transition: background .15s; }
+  .sw::after { content: ""; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: #6b7488;
+    transition: left .15s, background .15s; }
+  .sw.on { background: rgba(247,147,26,.55); }
+  .sw.on::after { left: 19px; background: var(--accent); }
+  .cache-stats { font-size: .8rem; color: var(--muted); margin-top: .5rem; font-variant-numeric: tabular-nums; }
+  .cache-stats b { color: var(--fg); font-weight: 600; }
   .toggle.soon { opacity: .65; }
   .toggle .t-name { font-weight: 600; font-size: .92rem; }
   .toggle .t-name .soon-tag { font-size: .62rem; font-weight: 700; text-transform: uppercase; letter-spacing: .05em;
@@ -112,6 +118,7 @@
     <div class="cell"><div class="k">blocks this session</div><div class="v" id="x-sblocks">—</div></div>
     <div class="cell"><div class="k">transactions decoded</div><div class="v" id="x-txs">—</div></div>
     <div class="cell"><div class="k">block data decoded</div><div class="v" id="x-bytes">—</div></div>
+    <div class="cell"><div class="k">served from cache</div><div class="v" id="x-cache">—</div></div>
     <div class="cell"><div class="k">feed age</div><div class="v" id="x-age">—</div></div>
   </div>
 
@@ -141,10 +148,14 @@
   <h2>Local node <span style="font-size:.7rem;color:var(--muted);font-weight:400">— roadmap</span></h2>
   <p class="h2note">Where this is heading: from a live viewer into a self-sufficient node that needs no block API.</p>
   <div class="panel">
-    <div class="toggle soon">
-      <div class="sw"></div>
-      <div><div class="t-name">Cache blocks locally <span class="soon-tag">soon</span></div>
-        <div class="t-desc">Persist validated blocks in your browser (OPFS) so they aren't re-fetched, and build a growing local history. Cache size will appear here.</div></div>
+    <div class="toggle" id="cache-toggle" role="button" tabindex="0" style="cursor:pointer">
+      <div class="sw" id="cache-sw"></div>
+      <div style="flex:1">
+        <div class="t-name">Cache blocks locally</div>
+        <div class="t-desc">Persist validated blocks in your browser (OPFS) so they aren't re-fetched from a block API. Applies when the Blocks page reloads.</div>
+        <div class="cache-stats" id="cache-stats">—</div>
+        <div class="row" style="margin-top:.6rem"><button id="clear-cache">Clear cache</button></div>
+      </div>
     </div>
     <div class="toggle soon">
       <div class="sw"></div>
@@ -164,7 +175,8 @@
   </footer>
 </div>
 
-<script>
+<script type="module">
+import { BlockStore, opfsAvailable } from './block-store.js';
 const DEFAULT_PUBKEY = 'cccccc0a8338a4aba51691f309f2f892c6c58f655a1ec3fc30522c894c166d9c';
 const DEFAULT_RELAYS = ['wss://relay.damus.io', 'wss://nos.lol', 'wss://relay.primal.net'];
 const $ = (id) => document.getElementById(id);
@@ -200,6 +212,7 @@ function renderStats() {
   $('x-sblocks').textContent = fmt(s.blocks);
   $('x-txs').textContent = fmt(s.txs);
   $('x-bytes').innerHTML = `${mb(s.bytes)} <small>MB</small>`;
+  $('x-cache').innerHTML = `${fmt(s.cacheHits || 0)}<small> of ${fmt(s.blocks || 0)}</small>`;
   $('x-age').textContent = ago(snap.feedAt);
 
   const t = snap.totals || {};
@@ -238,15 +251,18 @@ function validate() {
   $('relays-hint').className = 'hint' + ((badRelays.length || relays.length === 0) ? ' err' : '');
   return pubOk && relays.length > 0 && badRelays.length === 0;
 }
+function readCfg() { try { return JSON.parse(localStorage.getItem('blockhealth.config') || '{}'); } catch { return {}; } }
+function writeCfg(cfg) { try { localStorage.setItem('blockhealth.config', JSON.stringify(cfg)); } catch { /* disabled */ } }
+function flashSaved() { $('saved').classList.add('show'); setTimeout(() => $('saved').classList.remove('show'), 1600); }
+
 function save() {
   if (!validate()) return false;
   const { pub, relays } = parseForm();
-  const cfg = {};
-  if (pub !== DEFAULT_PUBKEY) cfg.publisher = pub;
-  if (JSON.stringify(relays) !== JSON.stringify(DEFAULT_RELAYS)) cfg.relays = relays;
-  try { localStorage.setItem('blockhealth.config', JSON.stringify(cfg)); } catch {}
-  $('saved').classList.add('show');
-  setTimeout(() => $('saved').classList.remove('show'), 1600);
+  const cfg = readCfg(); // preserve unrelated fields (e.g. cache)
+  if (pub !== DEFAULT_PUBKEY) cfg.publisher = pub; else delete cfg.publisher;
+  if (JSON.stringify(relays) !== JSON.stringify(DEFAULT_RELAYS)) cfg.relays = relays; else delete cfg.relays;
+  writeCfg(cfg);
+  flashSaved();
   return true;
 }
 
@@ -257,15 +273,51 @@ $('save-open').addEventListener('click', () => { if (save()) location.href = './
 $('reset').addEventListener('click', () => {
   localStorage.removeItem('blockhealth.config');
   loadConfig();
-  $('saved').classList.add('show');
-  setTimeout(() => $('saved').classList.remove('show'), 1600);
+  renderCacheToggle();
+  flashSaved();
 });
 
+// ---- block cache (OPFS) ----
+const store = opfsAvailable() ? new BlockStore() : null;
+const cacheEnabled = () => readCfg().cache !== false; // default on
+function renderCacheToggle() {
+  $('cache-sw').classList.toggle('on', !!store && cacheEnabled());
+  if (!store) { $('cache-toggle').classList.add('soon'); $('cache-toggle').style.cursor = 'default'; }
+}
+function toggleCache() {
+  if (!store) return;
+  const cfg = readCfg();
+  cfg.cache = !cacheEnabled();
+  if (cfg.cache) delete cfg.cache; // default is on — store only the opt-out
+  else cfg.cache = false;
+  writeCfg(cfg);
+  renderCacheToggle();
+  flashSaved();
+}
+$('cache-toggle').addEventListener('click', (e) => { if (e.target.id !== 'clear-cache') toggleCache(); });
+$('cache-toggle').addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleCache(); } });
+$('clear-cache').addEventListener('click', async (e) => {
+  e.stopPropagation();
+  if (store) { await store.clear(); await renderCacheStats(); }
+});
+async function renderCacheStats() {
+  const el = $('cache-stats');
+  if (!store) { el.innerHTML = 'Not supported in this browser (OPFS unavailable).'; return; }
+  try {
+    const s = await store.stats();
+    el.innerHTML = s.count
+      ? `<b>${fmt(s.count)}</b> blocks · <b>${mb(s.bytes)}</b> MB cached · heights <b>#${fmt(s.minHeight)}</b>–<b>#${fmt(s.maxHeight)}</b>`
+      : 'Empty — validated blocks are cached here as you browse.';
+  } catch { el.textContent = 'Cache unavailable.'; }
+}
+
 // live updates if the Blocks page is open in another tab
-window.addEventListener('storage', (e) => { if (e.key === 'blockhealth.stats') renderStats(); });
-setInterval(renderStats, 5000);
+window.addEventListener('storage', (e) => { if (e.key === 'blockhealth.stats') { renderStats(); renderCacheStats(); } });
+setInterval(() => { renderStats(); renderCacheStats(); }, 5000);
 loadConfig();
+renderCacheToggle();
 renderStats();
+renderCacheStats();
 </script>
 </body>
 </html>

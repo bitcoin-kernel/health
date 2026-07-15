@@ -5,12 +5,14 @@
 // (up to ~2 MB, ~5000 txs) never crosses back to the UI thread.
 import { Codec } from './engine/codec/codec.js';
 import { BlockEngine } from './engine/codec/blocks.js';
+import { BlockStore, opfsAvailable } from './block-store.js';
 
-let codec = null, be = null;
+let codec = null, be = null, store = null;
 
 const jl = async (n) => (await fetch(`./engine/schema/${n}.jsonld`)).json();
 
-async function init(network) {
+async function init(network, cache) {
+  store = (cache && opfsAvailable()) ? new BlockStore() : null;
   codec = new Codec(await jl('core'), await jl('proof'), await jl('p2p'));
   be = BlockEngine.fromSchemas(codec, await jl('chain'), await jl('validate'), await jl('script'), network);
 }
@@ -197,7 +199,13 @@ async function fetchWithTimeout(url, ms) {
   finally { clearTimeout(t); }
 }
 
-async function fetchRawHex(hash) {
+function bytesToHex(u8) {
+  let hex = '';
+  for (let i = 0; i < u8.length; i++) hex += u8[i].toString(16).padStart(2, '0');
+  return hex;
+}
+
+async function fetchRawBytes(hash) {
   const sources = [
     `https://mempool.space/api/block/${hash}/raw`,
     `https://blockstream.info/api/block/${hash}/raw`,
@@ -209,10 +217,7 @@ async function fetchRawHex(hash) {
       try {
         const r = await fetchWithTimeout(url, 15000);
         if (!r.ok) { lastErr = new Error(`${url} -> ${r.status}`); continue; }
-        const buf = new Uint8Array(await r.arrayBuffer());
-        let hex = '';
-        for (let i = 0; i < buf.length; i++) hex += buf[i].toString(16).padStart(2, '0');
-        return hex;
+        return new Uint8Array(await r.arrayBuffer());
       } catch (e) { lastErr = e; }
     }
   }
@@ -223,13 +228,23 @@ self.onmessage = async (ev) => {
   const msg = ev.data;
   try {
     if (msg.type === 'init') {
-      await init(msg.network || 'btc:mainnet');
+      await init(msg.network || 'btc:mainnet', msg.cache);
       self.postMessage({ type: 'ready' });
       return;
     }
     if (msg.type === 'validate') {
       const { hash, height } = msg;
-      const hex = await fetchRawHex(hash);
+      // read-through cache: serve cached bytes, else fetch and write-through
+      let bytes = null, cacheHit = false;
+      if (store && await store.has(height, hash)) {
+        bytes = await store.get(height, hash);
+        if (bytes) cacheHit = true;
+      }
+      if (!bytes) {
+        bytes = await fetchRawBytes(hash);
+        if (store) { try { await store.put(height, hash, bytes); } catch { /* quota / disabled */ } }
+      }
+      const hex = bytesToHex(bytes);
       const block = codec.decode('Block', hex);
       const struct = be.validateBlockStructure(block);
       const ctx = be.validateBlockContext(block, { height });
@@ -239,9 +254,10 @@ self.onmessage = async (ev) => {
       const tag = coinbaseTag(cb.inputs[0].scriptSig);
       self.postMessage({
         type: 'result', hash, height,
+        cacheHit,
         result: {
           txCount: block.transactions.length,
-          sizeBytes: hex.length / 2,
+          sizeBytes: bytes.length,
           weight: be.blockWeight(block),
           powOk,
           structOk: struct.ok, structFailures: failures(struct),

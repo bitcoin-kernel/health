@@ -285,6 +285,7 @@ let CFG = {};
 try { CFG = JSON.parse(localStorage.getItem('blockhealth.config') || '{}'); } catch { CFG = {}; }
 const PUBKEY = (typeof CFG.publisher === 'string' && /^[0-9a-f]{64}$/.test(CFG.publisher)) ? CFG.publisher : DEFAULT_PUBKEY;
 const RELAYS = (Array.isArray(CFG.relays) && CFG.relays.length) ? CFG.relays.filter((r) => /^wss?:\/\//.test(r)) : DEFAULT_RELAYS;
+const CACHE_ENABLED = CFG.cache !== false; // opt-out; blocks are cached in OPFS by default
 const KIND = 33333;
 const NETWORK = 'btc';          // NIP-333 d-tag
 const HEADER_HEX = 160;
@@ -292,7 +293,7 @@ const POLL_MS = 30000;
 
 // session-cumulative counters + a stats snapshot the Settings page reads
 const sessionSeen = new Set();
-let sessionBlocks = 0, sessionTxs = 0, sessionBytes = 0;
+let sessionBlocks = 0, sessionTxs = 0, sessionBytes = 0, sessionCacheHits = 0;
 const sessionSince = Date.now();
 function writeStatsSnapshot() {
   try {
@@ -308,7 +309,7 @@ function writeStatsSnapshot() {
     localStorage.setItem('blockhealth.stats', JSON.stringify({
       ts: Date.now(), tip: tipHeight, validated: done.length, windowSize: blocks.size,
       feedAt: lastEventAt, publisher: PUBKEY, relays: RELAYS, network: NETWORK, totals: t,
-      session: { blocks: sessionBlocks, txs: sessionTxs, bytes: sessionBytes, since: sessionSince },
+      session: { blocks: sessionBlocks, txs: sessionTxs, bytes: sessionBytes, cacheHits: sessionCacheHits, since: sessionSince },
     }));
   } catch { /* storage disabled / quota — stats are best-effort */ }
 }
@@ -336,11 +337,11 @@ const idleWorkers = [];
 const jobQueue = [];
 for (let i = 0; i < NUM_WORKERS; i++) {
   const w = new Worker('./validator-worker.js', { type: 'module' });
-  w.postMessage({ type: 'init', network: 'btc:mainnet' });
+  w.postMessage({ type: 'init', network: 'btc:mainnet', cache: CACHE_ENABLED });
   w.onmessage = (ev) => {
     const m = ev.data;
     if (m.type === 'ready') { idleWorkers.push(w); pump(); return; }
-    if (m.type === 'result') onValidated(m.hash, m.result);
+    if (m.type === 'result') onValidated(m.hash, m.result, m.cacheHit);
     else if (m.type === 'error') onValidateError(m.hash, m.error);
     idleWorkers.push(w); pump(); // job done — worker is free for the next
   };
@@ -510,13 +511,14 @@ function paintFace(el, rec) {
   el.innerHTML = `<div class="face"><span class="h">#${fmt(rec.height)}</span>${inner}</div>`;
 }
 
-function onValidated(hash, result) {
+function onValidated(hash, result, cacheHit) {
   const rec = blocks.get(hash);
   if (!rec) return;
   rec.state = 'done'; rec.result = result;
   if (!sessionSeen.has(hash)) {
     sessionSeen.add(hash);
     sessionBlocks++; sessionTxs += result.txCount; sessionBytes += result.sizeBytes;
+    if (cacheHit) sessionCacheHits++;
   }
   if (rec.el) paintFace(rec.el, rec);
   refreshSummary();
