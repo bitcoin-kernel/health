@@ -45,9 +45,12 @@
   .cell .v { font-size: 1.3rem; font-weight: 600; margin-top: .2rem; font-variant-numeric: tabular-nums; }
   .cell .v small { font-size: .7rem; color: var(--muted); font-weight: 400; }
 
-  .standardness { font-size: .84rem; color: var(--muted); margin: 0 0 .5rem; line-height: 1.55; font-variant-numeric: tabular-nums; }
-  .standardness b { color: #cdd2ec; font-weight: 600; }
-  .standardness .hi { color: #6fe6a0; }
+  .standardness { background: var(--panel-bg); border: 1px solid var(--border); border-left: 3px solid #2fbf6b;
+    border-radius: 10px; padding: 1rem 1.2rem; margin: 0 0 1.2rem; }
+  .standardness .big { font-size: 1.9rem; font-weight: 700; font-variant-numeric: tabular-nums; color: #6fe6a0; line-height: 1.1; }
+  .standardness .big span { font-size: .95rem; font-weight: 500; color: var(--fg); margin-left: .3rem; }
+  .standardness .sub { color: var(--muted); font-size: .84rem; margin-top: .45rem; line-height: 1.5; }
+  .standardness .sub b { color: #cdd2ec; font-weight: 600; }
   .breakdown { display: flex; flex-wrap: wrap; gap: .5rem; }
   .pchip { font-size: .82rem; font-weight: 700; padding: .25rem .6rem; border-radius: 6px; white-space: nowrap;
     font-variant-numeric: tabular-nums; }
@@ -306,8 +309,9 @@ function renderAllTime() {
   const stdPct = 100 * (outs - nStd) / outs;
   const stdStr = stdPct >= 99.9 ? stdPct.toFixed(2) : stdPct >= 99 ? stdPct.toFixed(1) : stdPct.toFixed(0);
   const ftx = txs ? 100 * dcTxs / txs : 0, fsp = blkB ? 100 * dcB / blkB : 0;
-  box.innerHTML = `<b class="hi">${stdStr}%</b> of datacarrier within the 80/83-byte standard `
-    + `(<b>${fmt(nStd)}</b> of <b>${fmt(outs)}</b> over) · footprint ~<b>${ftx.toFixed(0)}%</b> of txs, <b>${fsp.toFixed(0)}%</b> of block space`;
+  box.innerHTML = `<div class="big">${stdStr}%<span>of datacarrier obeys the 80/83-byte standard</span></div>`
+    + `<div class="sub">Only <b>${fmt(nStd)}</b> of <b>${fmt(outs)}</b> OP_RETURN datacarrier outputs exceed the historical limit — `
+    + `the relaxed cap is barely used. Datacarrier averages <b>${ftx.toFixed(0)}%</b> of transactions and <b>${fsp.toFixed(0)}%</b> of block space.</div>`;
 }
 
 // ---- config form ----
