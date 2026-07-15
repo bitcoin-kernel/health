@@ -75,6 +75,10 @@
   .pulse.live { background: #2ec07a; box-shadow: 0 0 8px #2ec07a; animation: breathe 2.2s ease-in-out infinite; }
   .pulse.err { background: var(--bad); box-shadow: 0 0 8px var(--bad); }
   @keyframes breathe { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
+  .peerpill { font-size: .76rem; font-weight: 600; padding: .18rem .6rem; border-radius: 999px;
+    background: rgba(0,221,255,.14); color: #7fe3ff; white-space: nowrap; }
+  .peerpill:hover { text-decoration: none; background: rgba(0,221,255,.22); }
+  .peerpill.live::before { content: "●"; color: #2ec07a; margin-right: .35rem; font-size: .7em; }
 
   .wrap { padding: 1.5rem 1.4rem 3rem; max-width: 1400px; margin: 0 auto; }
   .lede { color: var(--muted); font-size: .9rem; line-height: 1.55; max-width: 62ch; margin: 0 0 1.6rem; }
@@ -243,7 +247,7 @@
   </nav>
   <span class="spacer"></span>
   <span class="status"><span class="pulse" id="pulse"></span><span id="statusText">connecting…</span></span>
-  <a class="status" id="peerind" href="./settings.html" style="display:none; color:#7fe3ff; text-decoration:none"></a>
+  <a class="peerpill" id="peerind" href="./settings.html" style="display:none"></a>
 </header>
 
 <div class="wrap">
@@ -735,7 +739,16 @@ if (CFG.webrtc && CFG.webrtc.signalUrl && opfsAvailable()) {
     onStatus: (s) => {
       try { localStorage.setItem('blockhealth.peers', JSON.stringify({ ts: Date.now(), ...s })); } catch {}
       const el = $('peerind');
-      if (el) { el.style.display = ''; el.title = 'WebRTC peering (Settings)'; el.textContent = `⇄ ${s.connected} peer${s.connected === 1 ? '' : 's'}${s.syncing ? ' · catching up…' : ''}`; }
+      if (el) {
+        el.style.display = '';
+        el.classList.toggle('live', s.connected > 0);
+        el.title = 'WebRTC peering — click for Settings';
+        const detail = s.syncing ? ` · catching up ${fmt(s.received || 0)}…`
+          : s.received ? ` · ${fmt(s.received)} pulled` : '';
+        el.textContent = s.connected > 0
+          ? `⇄ ${s.connected} peer${s.connected === 1 ? '' : 's'}${detail}`
+          : '⇄ peering · no peer yet';
+      }
     },
   });
   peerSource.start();
