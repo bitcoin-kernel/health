@@ -212,6 +212,7 @@
 
 <script type="module">
 import { BlockStore, opfsAvailable } from './block-store.js';
+import { PeerSource } from './peer-source.js';
 const DEFAULT_PUBKEY = 'cccccc0a8338a4aba51691f309f2f892c6c58f655a1ec3fc30522c894c166d9c';
 const DEFAULT_RELAYS = ['wss://relay.damus.io', 'wss://nos.lol', 'wss://relay.primal.net'];
 const $ = (id) => document.getElementById(id);
@@ -458,19 +459,43 @@ $('copy-peer').addEventListener('click', async () => {
   try { await navigator.clipboard.writeText(link); $('peer-status').innerHTML = 'Link copied — share it, both browsers peer up on open.'; }
   catch { $('peer-status').textContent = link; } // clipboard blocked → show it to copy manually
 });
+// Settings runs its own LIVE peer while open, so status is real-time here — no
+// more stale "open Blocks for live status" snapshots. It joins the same room,
+// serves/pulls blocks like the Blocks page, and reports the candidate path.
+let peerSource = null, liveStatus = null;
+function ensurePeering() {
+  const cfg = readCfg().webrtc;
+  const want = !!(cfg?.signalUrl && opfsAvailable());
+  const same = peerSource && peerSource._sig === cfg?.signalUrl && peerSource._room === (cfg?.room || '');
+  if (want && !same) {
+    if (peerSource) peerSource.close();
+    peerSource = new PeerSource({
+      signalUrl: cfg.signalUrl, room: cfg.room || 'b17c0100b10c48ea1710', store,
+      onStatus: (s) => { liveStatus = s; try { localStorage.setItem('blockhealth.peers', JSON.stringify({ ts: Date.now(), ...s })); } catch {} renderPeerStatus(); },
+    });
+    peerSource._sig = cfg.signalUrl; peerSource._room = cfg.room || '';
+    peerSource.start();
+  } else if (!want && peerSource) {
+    peerSource.close(); peerSource = null; liveStatus = null;
+  }
+}
+window.addEventListener('beforeunload', () => { try { peerSource?.close(); } catch {} });
+
 function renderPeerStatus() {
+  ensurePeering();
   const el = $('peer-status');
   const enabled = !!readCfg().webrtc?.signalUrl;
   $('peer-sw').classList.toggle('on', enabled);
-  let snap = null;
-  try { snap = JSON.parse(localStorage.getItem('blockhealth.peers') || 'null'); } catch {}
   if (!enabled) { el.textContent = 'Disabled — set a signaling server above and reload Blocks.'; return; }
-  if (!snap) { el.textContent = 'Configured — open the Blocks page to connect.'; return; }
-  const age = snap.ts ? Math.round((Date.now() - snap.ts) / 1000) : null;
-  el.innerHTML = `<b>${fmt(snap.connected || 0)}</b> peer${snap.connected === 1 ? '' : 's'} connected · `
-    + `<b>${fmt(snap.received || 0)}</b> pulled · <b>${fmt(snap.served || 0)}</b> served`
-    + (snap.syncing ? ' · <span style="color:#7fe3ff">catching up…</span>' : '')
-    + (age != null && age < 120 ? ` · updated ${age}s ago` : ' · open Blocks for live status');
+  if (!opfsAvailable()) { el.textContent = 'Configured, but this browser has no OPFS — peering needs it.'; return; }
+  const s = liveStatus;
+  if (!s) { el.textContent = 'Connecting to signaling…'; return; }
+  const path = s.peers?.find((p) => p.path)?.path;
+  el.innerHTML = `<b>${fmt(s.connected || 0)}</b> peer${s.connected === 1 ? '' : 's'} connected · `
+    + `<b>${fmt(s.received || 0)}</b> pulled · <b>${fmt(s.served || 0)}</b> served`
+    + (path ? ` · via <span style="color:#7fe3ff">${path}</span>` : '')
+    + (s.syncing ? ' · <span style="color:#7fe3ff">catching up…</span>' : '')
+    + ' · <span style="opacity:.65">live</span>';
 }
 
 // live updates if the Blocks page is open in another tab

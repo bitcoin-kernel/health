@@ -746,7 +746,8 @@ if (CFG.webrtc && CFG.webrtc.signalUrl && opfsAvailable()) {
       if (el) {
         el.style.display = '';
         el.classList.toggle('live', s.connected > 0);
-        el.title = 'WebRTC peering — click for Settings';
+        const path = s.peers?.find((p) => p.path)?.path;
+        el.title = path ? `WebRTC peering via ${path} — click for Settings` : 'WebRTC peering — click for Settings';
         const detail = s.syncing ? ` · catching up ${fmt(s.received || 0)}…`
           : s.received ? ` · ${fmt(s.received)} pulled` : '';
         el.textContent = s.connected > 0

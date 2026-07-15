@@ -3,192 +3,99 @@
 // path: you request a block *by hash*, and verify the bytes hash back to it, so
 // a lying peer is caught (exactly the guarantee the esplora fetch relies on).
 //
-// The connection layer mirrors the proven kernel `mesh.js` against the same
-// JSS content-addressed signaling (announce/offer/answer, non-trickle ICE, STUN
-// candidates baked into each SDP — the tracker relays offers/answers but NOT ICE
-// candidates). Symmetric: every peer batches offers AND answers every offer it
-// receives, keyed by the signaling `from` id. Runs on the MAIN thread (WebRTC
+// The connection layer is the proven `MeshCore` library (extracted from the
+// play-grounds/webrtc lab). This file is purely the block protocol that rides
+// over each peer's data channel: control JSON (have / getblock / blockmeta /
+// blockend / noblock) plus binary block chunks. Runs on the MAIN thread (WebRTC
 // isn't available in Workers) and fills the OPFS BlockStore the worker reads.
 import { dsha256, reverseHex } from './engine/codec/hash.js';
+import { MeshCore } from './webrtc-mesh.js';
 
 const CHUNK = 64 * 1024;
 const HIGH_WATER = 4 * 1024 * 1024;
-const OFFER_BATCH = 4;            // offers per announce — the tracker fans them to distinct peers
-const REANNOUNCE_MS = 90_000;     // re-announce to discover new peers / refill slots
-const OFFER_TTL = 60_000;         // drop an unanswered offer after this
-const DEFAULT_ICE = [{ urls: 'stun:stun.l.google.com:19302' }];
-const rid = () => Math.random().toString(36).slice(2, 12);
 
 // block hash = dsha256 of the 80 header bytes, byte-reversed (display order)
 export const blockHashOf = (bytes) => reverseHex(dsha256(bytes.subarray(0, 80)));
 
-// non-trickle: wait until all STUN candidates are gathered into the SDP
-function iceComplete(pc) {
-  return new Promise((res) => {
-    if (pc.iceGatheringState === 'complete') return res();
-    const check = () => { if (pc.iceGatheringState === 'complete') { pc.removeEventListener('icegatheringstatechange', check); res(); } };
-    pc.addEventListener('icegatheringstatechange', check);
-    setTimeout(res, 8000);
-  });
-}
-
 export class PeerSource {
   constructor({ signalUrl, room = 'b17c0100b10c48ea1710', store, iceServers, onStatus = () => {} }) {
-    this.tracker = signalUrl;
-    this.swarm = room;
     this.store = store;
-    this.iceServers = (iceServers && iceServers.length) ? iceServers : DEFAULT_ICE;
     this.onStatus = onStatus;
-    this.peers = new Map();          // peerId (signaling `from`) -> entry { pc, ch, have, inbound, inboundReq }
-    this.pendingOffers = new Map();  // offer_id -> pc (offers awaiting an answer)
+    this.state = new Map();   // peerId -> { have:Map, inbound, inboundReq }
     this.reqSeq = 0; this.served = 0; this.received = 0; this.synced = 0;
-    this.syncing = false; this.syncDirty = false; this.syncTimer = null;
-    this.haveTimer = null; this.reannounceTimer = null;
-    this.closed = false; this.ws = null;
+    this.syncing = false; this.syncDirty = false; this.syncTimer = null; this.haveTimer = null;
+    this.closed = false;
+    this.core = new MeshCore({
+      url: signalUrl, room, iceServers, channelLabel: 'blocks',
+      onPeer: (id) => this._onPeer(id),
+      onDrop: (id) => this._onDrop(id),
+      onData: (id, data) => this._onData(id, data),
+      onChange: () => this._emit(),
+    });
   }
 
-  start() {
-    if (!this.tracker) return;
-    this._connect();
-    this.haveTimer = setInterval(() => this._broadcastHave(), 15000);
-  }
+  start() { if (!this.core.url) return; this.core.start(); this.haveTimer = setInterval(() => this._broadcastHave(), 15000); }
   close() {
     this.closed = true;
-    clearInterval(this.haveTimer); clearInterval(this.reannounceTimer); clearTimeout(this.syncTimer);
-    try { this.ws?.close(); } catch {}
-    for (const e of this.peers.values()) { try { e.ch?.close(); } catch {} try { e.pc?.close(); } catch {} }
-    this.peers.clear();
+    clearInterval(this.haveTimer); clearTimeout(this.syncTimer);
+    this.core.stop(); this.state.clear();
   }
   status() {
-    return { room: this.swarm, connected: this.peers.size, peers: [...this.peers.keys()],
-      served: this.served, received: this.received, synced: this.synced, syncing: this.syncing,
-      ws: this.ws ? this.ws.readyState : -1 };
+    const c = this.core.status();
+    return { room: c.room, connected: c.connected, ws: c.ws, peers: c.peers,
+      served: this.served, received: this.received, synced: this.synced, syncing: this.syncing };
   }
   _emit() { try { this.onStatus(this.status()); } catch {} }
 
-  // ---- signaling (JSS content-addressed room) ----
-  _connect() {
-    if (this.closed) return;
-    let ws;
-    try { ws = this.ws = new WebSocket(this.tracker); } catch { setTimeout(() => this._connect(), 3000); return; }
-    ws.onopen = () => { this._announce(); this.reannounceTimer = setInterval(() => this._announce(), REANNOUNCE_MS); this._emit(); };
-    ws.onmessage = (e) => { let m; try { m = JSON.parse(e.data); } catch { return; } this._onSignal(m); };
-    ws.onerror = () => {};
-    ws.onclose = () => { clearInterval(this.reannounceTimer); this._emit(); if (!this.closed) setTimeout(() => this._connect(), 3000); };
+  // ---- peer lifecycle (from MeshCore) ----
+  _onPeer(id) { this.state.set(id, { have: new Map(), inbound: null, inboundReq: null }); this._sendHave(id); this._scheduleSync(); }
+  _onDrop(id) { this.state.delete(id); }
+  _onData(id, data) {
+    const st = this.state.get(id); if (!st) return;
+    if (typeof data === 'string') { let m; try { m = JSON.parse(data); } catch { return; } this._onControl(id, st, m); }
+    else if (st.inbound) { const u8 = new Uint8Array(data); st.inbound.chunks.push(u8); st.inbound.received += u8.length; }
   }
-  _ws(m) { if (this.ws && this.ws.readyState === 1) this.ws.send(JSON.stringify(m)); }
+  _send(id, obj) { this.core.send(id, JSON.stringify(obj)); }
 
-  async _makeOffer() {
-    const pc = new RTCPeerConnection({ iceServers: this.iceServers });
-    pc._ch = pc.createDataChannel('blocks');
-    await pc.setLocalDescription(await pc.createOffer());
-    await iceComplete(pc);
-    return { pc, sdp: pc.localDescription.sdp };
-  }
-
-  async _announce() {
-    if (!this.ws || this.ws.readyState !== 1) return;
-    const offers = [];
-    for (let i = 0; i < OFFER_BATCH; i++) {
-      try {
-        const { pc, sdp } = await this._makeOffer();
-        const offer_id = rid();
-        this.pendingOffers.set(offer_id, pc);
-        setTimeout(() => { if (this.pendingOffers.delete(offer_id)) { try { pc.close(); } catch {} } }, OFFER_TTL);
-        offers.push({ offer_id, sdp });
-      } catch {}
-    }
-    if (offers.length) this._ws({ type: 'announce', resource: this.swarm, offers });
-  }
-
-  async _onSignal(m) {
-    if (m.resource !== this.swarm) return;
-    if (m.type === 'offer' && m.from && typeof m.sdp === 'string') {
-      // a peer wants to connect to us — answer (we receive their data channel)
-      try {
-        const pc = new RTCPeerConnection({ iceServers: this.iceServers });
-        pc.ondatachannel = (ev) => this._adopt(m.from, pc, ev.channel);
-        await pc.setRemoteDescription({ type: 'offer', sdp: m.sdp });
-        await pc.setLocalDescription(await pc.createAnswer());
-        await iceComplete(pc);
-        this._ws({ type: 'answer', resource: this.swarm, to: m.from, offer_id: m.offer_id, sdp: pc.localDescription.sdp });
-      } catch {}
-    } else if (m.type === 'answer' && m.offer_id && typeof m.sdp === 'string') {
-      const pc = this.pendingOffers.get(m.offer_id);
-      if (pc) {
-        this.pendingOffers.delete(m.offer_id);
-        try { await pc.setRemoteDescription({ type: 'answer', sdp: m.sdp }); this._adopt(m.from, pc, pc._ch); }
-        catch { try { pc.close(); } catch {} }
-      }
-    }
-  }
-
-  // Register a peer (keyed by signaling id) once its channel opens — same path
-  // for offerer and answerer, so both sides see each other.
-  _adopt(peerId, pc, ch) {
-    ch.binaryType = 'arraybuffer';
-    ch.bufferedAmountLowThreshold = 256 * 1024;
-    const entry = { pc, ch, peerId, have: new Map(), inbound: null, inboundReq: null };
-    const register = () => { this.peers.set(peerId, entry); this._sendHave(entry); this._scheduleSync(); this._emit(); };
-    const drop = () => { if (this.peers.get(peerId) === entry) { this.peers.delete(peerId); this._emit(); } };
-    if (ch.readyState === 'open') register(); else ch.addEventListener('open', register);
-    ch.addEventListener('close', drop);
-    ch.onmessage = (ev) => this._onChannel(entry, ev.data);
-    pc.onconnectionstatechange = () => { if (['failed', 'disconnected', 'closed'].includes(pc.connectionState)) drop(); };
-  }
-
-  // ---- data channel: control (JSON strings) + binary block chunks ----
-  _chSend(entry, obj) { try { if (entry.ch.readyState === 'open') entry.ch.send(JSON.stringify(obj)); } catch {} }
-
-  _onChannel(entry, data) {
-    if (typeof data === 'string') {
-      let m; try { m = JSON.parse(data); } catch { return; }
-      this._onControl(entry, m);
-    } else {
-      const inb = entry.inbound; if (!inb) return;
-      const u8 = new Uint8Array(data);
-      inb.chunks.push(u8); inb.received += u8.length;
-    }
-  }
-
-  _onControl(entry, m) {
+  _onControl(id, st, m) {
     switch (m.t) {
-      case 'have': for (const [h, ht] of (m.list || [])) entry.have.set(h, ht); this._scheduleSync(); break;
-      case 'getblock': this._serve(entry, m); break;
-      case 'blockmeta': entry.inbound = { hash: m.hash, size: m.size, chunks: [], received: 0 }; break;
-      case 'blockend': this._finishInbound(entry); break;
-      case 'noblock': { const p = entry.inboundReq; if (p) { entry.inboundReq = null; p.resolve(null); } break; }
+      case 'have': for (const [h, ht] of (m.list || [])) st.have.set(h, ht); this._scheduleSync(); break;
+      case 'getblock': this._serve(id, st, m); break;
+      case 'blockmeta': st.inbound = { hash: m.hash, size: m.size, chunks: [], received: 0 }; break;
+      case 'blockend': this._finishInbound(id, st); break;
+      case 'noblock': { const p = st.inboundReq; if (p) { st.inboundReq = null; p.resolve(null); } break; }
       default: break;
     }
   }
 
-  _sendHave(entry) {
+  _sendHave(id) {
     if (!this.store) return;
-    this.store.list().then((l) => this._chSend(entry, { t: 'have', list: l.slice(-100).map((b) => [b.hash, b.height]) })).catch(() => {});
+    this.store.list().then((l) => this._send(id, { t: 'have', list: l.slice(-100).map((b) => [b.hash, b.height]) })).catch(() => {});
   }
-  _broadcastHave() { for (const e of this.peers.values()) this._sendHave(e); }
+  _broadcastHave() { for (const id of this.state.keys()) this._sendHave(id); }
 
   // ---- serving a block we hold ----
-  async _serve(entry, m) {
+  async _serve(id, st, m) {
     let rec = null; try { rec = await this.store.findByHash(m.hash); } catch {}
-    if (!rec) return this._chSend(entry, { t: 'noblock', id: m.id, hash: m.hash });
+    if (!rec) return this._send(id, { t: 'noblock', id: m.id, hash: m.hash });
     let bytes = null; try { bytes = await this.store.get(rec.height, rec.hash); } catch {}
-    if (!bytes) return this._chSend(entry, { t: 'noblock', id: m.id, hash: m.hash });
-    this._chSend(entry, { t: 'blockmeta', id: m.id, hash: m.hash, size: bytes.length });
-    const ch = entry.ch;
+    if (!bytes) return this._send(id, { t: 'noblock', id: m.id, hash: m.hash });
+    this._send(id, { t: 'blockmeta', id: m.id, hash: m.hash, size: bytes.length });
+    const ch = this.core.channel(id);
+    if (!ch) return;
     for (let off = 0; off < bytes.length; off += CHUNK) {
       if (ch.readyState !== 'open') return;
       if (ch.bufferedAmount > HIGH_WATER) await new Promise((r) => ch.addEventListener('bufferedamountlow', r, { once: true }));
       ch.send(bytes.subarray(off, off + CHUNK));
     }
-    this._chSend(entry, { t: 'blockend', id: m.id });
+    this._send(id, { t: 'blockend', id: m.id });
     this.served++; this._emit();
   }
 
   // ---- requesting a block, verifying it, caching it ----
-  _finishInbound(entry) {
-    const inb = entry.inbound, req = entry.inboundReq;
-    entry.inbound = null; entry.inboundReq = null;
+  _finishInbound(id, st) {
+    const inb = st.inbound, req = st.inboundReq;
+    st.inbound = null; st.inboundReq = null;
     if (!inb || !req) return;
     const bytes = new Uint8Array(inb.received);
     let off = 0; for (const c of inb.chunks) { bytes.set(c, off); off += c.length; }
@@ -200,16 +107,16 @@ export class PeerSource {
 
   // Fetch a block by hash from a peer that advertises it. Verified bytes or null.
   requestBlock(hash, height = null, timeoutMs = 20000) {
-    let entry = null, h = height;
-    for (const e of this.peers.values()) {
-      if (e.ch?.readyState === 'open' && !e.inboundReq && e.have.has(hash)) { entry = e; if (h == null) h = e.have.get(hash); break; }
+    let id = null, st = null, h = height;
+    for (const [pid, s] of this.state) {
+      if (!s.inboundReq && s.have.has(hash) && this.core.channel(pid)?.readyState === 'open') { id = pid; st = s; if (h == null) h = s.have.get(hash); break; }
     }
-    if (!entry) return Promise.resolve(null);
+    if (!st) return Promise.resolve(null);
     return new Promise((resolve) => {
       const done = (v) => { clearTimeout(timer); resolve(v); };
-      const timer = setTimeout(() => { entry.inboundReq = null; entry.inbound = null; done(null); }, timeoutMs);
-      entry.inboundReq = { hash, height: h, resolve: done };
-      this._chSend(entry, { t: 'getblock', id: 'r' + (this.reqSeq++), hash });
+      const timer = setTimeout(() => { st.inboundReq = null; st.inbound = null; done(null); }, timeoutMs);
+      st.inboundReq = { hash, height: h, resolve: done };
+      this._send(id, { t: 'getblock', id: 'r' + (this.reqSeq++), hash });
     });
   }
 
@@ -224,7 +131,7 @@ export class PeerSource {
     this.syncing = true; this.syncDirty = false; this._emit();
     try {
       const want = new Map();
-      for (const e of this.peers.values()) for (const [h, ht] of e.have) if (!want.has(h)) want.set(h, ht);
+      for (const s of this.state.values()) for (const [h, ht] of s.have) if (!want.has(h)) want.set(h, ht);
       for (const [hash, height] of want) {
         if (this.closed) break;
         if (await this.store.has(height, hash)) continue;
@@ -239,7 +146,7 @@ export class PeerSource {
 
   // convenience for the two-tab test: pull one block a peer advertises, verify it.
   async testFetch() {
-    for (const e of this.peers.values()) for (const [hash, height] of e.have) {
+    for (const [, s] of this.state) for (const [hash, height] of s.have) {
       const bytes = await this.requestBlock(hash, height);
       return { hash, height, ok: !!bytes, bytes: bytes ? bytes.length : 0 };
     }
