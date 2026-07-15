@@ -18,10 +18,12 @@ const HIGH_WATER = 4 * 1024 * 1024;
 export const blockHashOf = (bytes) => reverseHex(dsha256(bytes.subarray(0, 80)));
 
 export class PeerSource {
-  constructor({ signalUrl, room = 'b17c0100b10c48ea1710', store, iceServers, onStatus = () => {} }) {
+  constructor({ signalUrl, room = 'b17c0100b10c48ea1710', store, iceServers, onStatus = () => {}, onBlock = () => {} }) {
     this.store = store;
     this.onStatus = onStatus;
+    this.onBlock = onBlock; // (hash, height) when a block's bytes arrive from a peer
     this.state = new Map();   // peerId -> { have:Map, inbound, inboundReq }
+    this.receivedHashes = new Set(); // block hashes obtained from a peer this session (for provenance)
     this.reqSeq = 0; this.served = 0; this.received = 0; this.synced = 0;
     this.syncing = false; this.syncDirty = false; this.syncTimer = null; this.haveTimer = null;
     this.closed = false;
@@ -101,7 +103,9 @@ export class PeerSource {
     let off = 0; for (const c of inb.chunks) { bytes.set(c, off); off += c.length; }
     if (bytes.length < 80 || blockHashOf(bytes) !== req.hash) { req.resolve(null); return; } // liar / corrupt → reject
     if (this.store && req.height != null) this.store.put(req.height, req.hash, bytes).catch(() => {});
+    this.receivedHashes.add(req.hash); // provenance: this block came from a peer
     this.received++; this._emit();
+    try { this.onBlock(req.hash, req.height); } catch {}
     req.resolve(bytes);
   }
 

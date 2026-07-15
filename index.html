@@ -146,6 +146,10 @@
   }
   .bitcoin-block .h { font-size: .86rem; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: .01em;
     text-shadow: 0 1px 2px rgba(0,0,0,.55); position: relative; }
+  .bitcoin-block .h .src { font-weight: 700; }
+  .bitcoin-block .h .src.peer { color: #4fe3c8; font-size: .74rem; }
+  .bitcoin-block .h .src.cache { display: inline-block; width: 5px; height: 5px; border-radius: 50%;
+    background: rgba(255,255,255,.45); vertical-align: middle; margin-bottom: 2px; }
   .bitcoin-block .bottom { margin-top: auto; display: flex; flex-direction: column; gap: .12rem; position: relative; }
   .bitcoin-block .fill { height: 5px; border-radius: 3px; background: #0b1018aa; overflow: hidden; display: flex;
     box-shadow: inset 0 0 0 1px #ffffff12; }
@@ -184,6 +188,11 @@
   .card .sub { color: var(--muted); font-size: .8rem; word-break: break-all; margin-bottom: 1rem; }
   .card .miner { font-size: .92rem; margin-bottom: 1.3rem; display: flex; align-items: baseline; gap: .55rem; flex-wrap: wrap; }
   .card .miner b { color: var(--accent); font-weight: 600; }
+  .card .dsource { font-size: .82rem; color: var(--muted); margin-bottom: 1rem; }
+  .card .dsource b { font-weight: 600; }
+  .card .dsource .src-peer { color: #16b39a; }
+  .card .dsource .src-cache { color: var(--muted); }
+  .card .dsource .src-net { color: var(--accent); }
   .card .miner .ctag { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .7rem;
     color: var(--muted); background: var(--stat-box-bg); border: 1px solid var(--border);
     padding: .12rem .4rem; border-radius: 4px; word-break: break-all; }
@@ -311,6 +320,7 @@ try { CFG = JSON.parse(localStorage.getItem('blockhealth.config') || '{}'); } ca
 const PUBKEY = (typeof CFG.publisher === 'string' && /^[0-9a-f]{64}$/.test(CFG.publisher)) ? CFG.publisher : DEFAULT_PUBKEY;
 const RELAYS = (Array.isArray(CFG.relays) && CFG.relays.length) ? CFG.relays.filter((r) => /^wss?:\/\//.test(r)) : DEFAULT_RELAYS;
 const CACHE_ENABLED = CFG.cache !== false; // opt-out; blocks are cached in OPFS by default
+const PEERING_ENABLED = !!(CFG.webrtc && CFG.webrtc.signalUrl && opfsAvailable()); // WebRTC block peering
 const KIND = 33333;
 const NETWORK = 'btc';          // NIP-333 d-tag
 const HEADER_HEX = 160;
@@ -410,11 +420,18 @@ const idleWorkers = [];
 const jobQueue = [];
 for (let i = 0; i < NUM_WORKERS; i++) {
   const w = new Worker('./validator-worker.js', { type: 'module' });
-  w.postMessage({ type: 'init', network: 'btc:mainnet', cache: CACHE_ENABLED });
-  w.onmessage = (ev) => {
+  w.postMessage({ type: 'init', network: 'btc:mainnet', cache: CACHE_ENABLED, peer: PEERING_ENABLED });
+  w.onmessage = async (ev) => {
     const m = ev.data;
     if (m.type === 'ready') { idleWorkers.push(w); pump(); return; }
-    if (m.type === 'result') onValidated(m.hash, m.result, m.cacheHit);
+    if (m.type === 'peerfetch') {
+      // worker wants this block from a peer before it hits the explorer; still busy
+      let bytes = null;
+      try { if (peerSource) bytes = await peerSource.requestBlock(m.hash, m.height, 5000); } catch {}
+      w.postMessage({ type: 'peerbytes', hash: m.hash, bytes });
+      return;
+    }
+    if (m.type === 'result') onValidated(m.hash, m.result, m.cacheHit, m.source);
     else if (m.type === 'error') onValidateError(m.hash, m.error);
     idleWorkers.push(w); pump(); // job done — worker is free for the next
   };
@@ -499,7 +516,7 @@ function ingest(event) {
       const cached = CACHE_ENABLED ? resultCache[b.hash] : null;
       if (cached && cached.result && cached.v === RESULT_VERSION) {
         // already validated this exact hash — render instantly, skip the worker
-        rec.state = 'done'; rec.result = cached.result;
+        rec.state = 'done'; rec.result = cached.result; rec.source = setSource(b.hash, 'cache');
         recordClassification(b.hash, b.height, cached.result);
         if (!sessionSeen.has(b.hash)) {
           sessionSeen.add(b.hash);
@@ -521,6 +538,27 @@ function ingest(event) {
   if (autoFollow && ordered.length) selectBlock(ordered[0].hash);
 
   refreshAge(); refreshSummary();
+}
+
+// subtle provenance marker: where THIS block's raw bytes came from.
+function srcDot(source) {
+  if (source === 'peer') return ` <span class="src peer" title="block data pulled from a WebRTC peer — not an explorer">⇄</span>`;
+  if (source === 'cache') return ` <span class="src cache" title="served from your local cache"></span>`;
+  return ''; // 'net' (explorer) or unknown → no marker, keeps it subtle
+}
+function srcDetail(source) {
+  return source === 'peer' ? '⇄ pulled from a WebRTC peer'
+    : source === 'cache' ? '▣ your local cache'
+    : '↗ a block explorer';
+}
+// Sticky per-hash provenance: the FIRST real source wins, a peer always wins, and
+// it never downgrades — so a re-render (block dropped + re-added from the result
+// cache) can't relabel a peer/explorer block as "cache".
+const blockSource = new Map(); // hash -> 'peer' | 'net' | 'cache'
+function setSource(hash, s) {
+  if (blockSource.get(hash) === 'peer') return;   // peer is terminal
+  if (s === 'peer' || !blockSource.has(hash)) blockSource.set(hash, s);
+  return blockSource.get(hash);
 }
 
 function healthClass(r) {
@@ -593,13 +631,16 @@ function paintFace(el, rec) {
       <span class="word ${cls}">${word}</span>
     </div>`;
   }
-  el.innerHTML = `<div class="face"><span class="h">#${fmt(rec.height)}</span>${inner}</div>`;
+  el.innerHTML = `<div class="face"><span class="h">#${fmt(rec.height)}${srcDot(rec.source)}</span>${inner}</div>`;
 }
 
-function onValidated(hash, result, cacheHit) {
+function onValidated(hash, result, cacheHit, source) {
   const rec = blocks.get(hash);
   if (!rec) return;
   rec.state = 'done'; rec.result = result;
+  setSource(hash, source || (cacheHit ? 'cache' : 'net'));
+  if (peerSource && peerSource.receivedHashes.has(hash)) setSource(hash, 'peer');
+  rec.source = blockSource.get(hash);
   resultCache[hash] = { result, ts: Date.now(), v: RESULT_VERSION };
   saveResults();
   recordClassification(hash, rec.height, result);
@@ -698,6 +739,8 @@ function renderDetail(rec) {
     </div>
     ${h.dcTxs ? `<div class="dc-footprint">datacarrier footprint · <b>${(100 * h.dcTxs / r.txCount).toFixed(0)}%</b> of txs · <b>${(100 * h.dcBytes / r.sizeBytes).toFixed(0)}%</b> of block space</div>` : ''}
 
+    <div class="dsource" title="where this block's raw bytes were loaded from (verified by hash either way)">block data source · <b class="src-${rec.source || 'net'}">${srcDetail(rec.source)}</b></div>
+
     <div class="checks">
       ${chk(rec.powOk, 'header proof-of-work')}
       ${chk(rec.linkOk, 'chain linkage')}
@@ -734,9 +777,10 @@ function renderDetail(rec) {
 
 // ---- WebRTC peer source (experimental; opt-in via Settings, config-only) ----
 // Runs on the main thread, fills/serves the OPFS block store. Trustless: every
-// received block is verified by hash. Phase 1 — not yet in the fetch path.
+// received block is verified by hash. In the fetch path: the worker prefers a
+// peer over the explorer (cache → peer → explorer), and catch-up pulls the rest.
 let peerSource = null;
-if (CFG.webrtc && CFG.webrtc.signalUrl && opfsAvailable()) {
+if (PEERING_ENABLED) {
   peerSource = new PeerSource({
     signalUrl: CFG.webrtc.signalUrl, room: CFG.webrtc.room || 'b17c0100b10c48ea1710',
     store: new BlockStore(),
@@ -753,6 +797,16 @@ if (CFG.webrtc && CFG.webrtc.signalUrl && opfsAvailable()) {
         el.textContent = s.connected > 0
           ? `⇄ ${s.connected} peer${s.connected === 1 ? '' : 's'}${detail}`
           : '⇄ peering · no peer yet';
+      }
+    },
+    // a peer delivered this block's bytes — mark it peer-sourced and repaint
+    onBlock: (hash) => {
+      setSource(hash, 'peer');
+      const rec = blocks.get(hash);
+      if (rec && rec.source !== 'peer') {
+        rec.source = 'peer';
+        if (rec.el) paintFace(rec.el, rec);
+        if (selected === hash) renderDetail(rec);
       }
     },
   });

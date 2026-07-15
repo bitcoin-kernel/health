@@ -7,9 +7,21 @@ import { Codec } from './engine/codec/codec.js';
 import { BlockEngine } from './engine/codec/blocks.js';
 import { BlockStore, opfsAvailable } from './block-store.js';
 
-let codec = null, be = null, store = null;
+let codec = null, be = null, store = null, peeringEnabled = false;
 
 const jl = async (n) => (await fetch(`./engine/schema/${n}.jsonld`)).json();
+
+// Ask the main thread whether a connected WebRTC peer can serve this block. The
+// main thread runs peerSource.requestBlock (verifies bytes hash to the requested
+// block hash) and posts back the bytes, or null if no peer has it / it times out.
+const peerWaiters = new Map();
+function askPeer(hash, height) {
+  return new Promise((resolve) => {
+    const to = setTimeout(() => { if (peerWaiters.delete(hash)) resolve(null); }, 6000);
+    peerWaiters.set(hash, (b) => { clearTimeout(to); resolve(b); });
+    self.postMessage({ type: 'peerfetch', hash, height });
+  });
+}
 
 async function init(network, cache) {
   store = (cache && opfsAvailable()) ? new BlockStore() : null;
@@ -254,25 +266,51 @@ self.onmessage = async (ev) => {
   const msg = ev.data;
   try {
     if (msg.type === 'init') {
+      peeringEnabled = !!msg.peer;
       await init(msg.network || 'btc:mainnet', msg.cache);
       self.postMessage({ type: 'ready' });
       return;
     }
+    if (msg.type === 'peerbytes') {
+      const w = peerWaiters.get(msg.hash);
+      if (w) { peerWaiters.delete(msg.hash); w(msg.bytes && msg.bytes.length ? msg.bytes : null); }
+      return;
+    }
     if (msg.type === 'validate') {
       const { hash, height } = msg;
-      // read-through cache: serve cached bytes, else fetch and write-through
-      let bytes = null, cacheHit = false;
+      // Block-data source priority: local OPFS cache → a WebRTC peer → the
+      // explorer. Peers cut the explorer out of the path once the swarm holds a
+      // block; the explorer stays the trustless fallback (and self-heal below).
+      let bytes = null, source = 'net';
       if (store && await store.has(height, hash)) {
         bytes = await store.get(height, hash);
-        if (bytes) cacheHit = true;
+        if (bytes) source = 'cache';
+      }
+      if (!bytes && peeringEnabled) {
+        const pb = await askPeer(hash, height);
+        if (pb && pb.length >= 80) { bytes = pb; source = 'peer'; } // peerSource verified the header hash + cached it
       }
       if (!bytes) {
         bytes = await fetchRawBytes(hash);
+        source = 'net';
         if (store) { try { await store.put(height, hash, bytes); } catch { /* quota / disabled */ } }
       }
-      const hex = bytesToHex(bytes);
-      const block = codec.decode('Block', hex);
-      const struct = be.validateBlockStructure(block);
+      let hex = bytesToHex(bytes);
+      let block = codec.decode('Block', hex);
+      let struct = be.validateBlockStructure(block);
+      // Trustless self-heal: the requested hash only pins the 80-byte header, so a
+      // peer (or a poisoned cache) could serve a header-matching body that fails
+      // the merkle root. If cache/peer bytes don't validate, distrust them, drop
+      // the cache entry, and refetch from the explorer.
+      if (!struct.ok && source !== 'net') {
+        if (store) { try { await store.delete(height, hash); } catch {} }
+        bytes = await fetchRawBytes(hash);
+        source = 'net';
+        if (store) { try { await store.put(height, hash, bytes); } catch {} }
+        hex = bytesToHex(bytes);
+        block = codec.decode('Block', hex);
+        struct = be.validateBlockStructure(block);
+      }
       const ctx = be.validateBlockContext(block, { height });
       const powOk = codec.checkProofOfWork(block.header);
       const health = measureHealth(block, codec);
@@ -280,7 +318,7 @@ self.onmessage = async (ev) => {
       const tag = coinbaseTag(cb.inputs[0].scriptSig);
       self.postMessage({
         type: 'result', hash, height,
-        cacheHit,
+        cacheHit: source === 'cache', source,
         result: {
           txCount: block.transactions.length,
           sizeBytes: bytes.length,
