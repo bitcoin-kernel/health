@@ -279,6 +279,8 @@
 <script type="module">
 import { Codec } from './engine/codec/codec.js';
 import { verifyNostrEvent } from './engine/codec/nostr.js';
+import { BlockStore, opfsAvailable } from './block-store.js';
+import { PeerSource } from './peer-source.js';
 
 const DEFAULT_RELAYS = ['wss://relay.damus.io', 'wss://nos.lol', 'wss://relay.primal.net'];
 const DEFAULT_PUBKEY = 'cccccc0a8338a4aba51691f309f2f892c6c58f655a1ec3fc30522c894c166d9c';
@@ -707,6 +709,20 @@ function renderDetail(rec) {
     <tbody>${rows}</tbody></table>` :
     `<p style="color:var(--muted);font-size:.85rem;margin-top:1rem">Every OP_RETURN in this block stays within the historical 80/83-byte datacarrier standard.</p>`}
   </div>`;
+}
+
+// ---- WebRTC peer source (experimental; opt-in via Settings, config-only) ----
+// Runs on the main thread, fills/serves the OPFS block store. Trustless: every
+// received block is verified by hash. Phase 1 — not yet in the fetch path.
+let peerSource = null;
+if (CFG.webrtc && CFG.webrtc.signalUrl && opfsAvailable()) {
+  peerSource = new PeerSource({
+    signalUrl: CFG.webrtc.signalUrl, room: CFG.webrtc.room || 'b17c0100b10c48ea1710',
+    store: new BlockStore(),
+    onStatus: (s) => { try { localStorage.setItem('blockhealth.peers', JSON.stringify({ ts: Date.now(), ...s })); } catch {} },
+  });
+  peerSource.start();
+  window.peerSource = peerSource; // exposed for two-tab testing
 }
 
 // ---- go ----

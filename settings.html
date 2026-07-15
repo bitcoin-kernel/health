@@ -189,10 +189,18 @@
       <div><div class="t-name">Full validation from a snapshot <span class="soon-tag">later</span></div>
         <div class="t-desc">Maintain a UTXO set and validate every input (prevouts, scripts, fees) — the current page validates structure + context only.</div></div>
     </div>
-    <div class="toggle soon">
-      <div class="sw"></div>
-      <div><div class="t-name">Peer over WebRTC <span class="soon-tag">later</span></div>
-        <div class="t-desc">Fetch blocks directly from other peers instead of a block API, so the data path is trustless end-to-end.</div></div>
+    <div class="toggle">
+      <div class="sw" id="peer-sw"></div>
+      <div style="flex:1">
+        <div class="t-name">Peer over WebRTC <span class="soon-tag" style="background:rgba(0,221,255,.18);color:#7fe3ff">experimental</span></div>
+        <div class="t-desc">Fetch blocks directly from other browsers (and serve yours) over a WebRTC mesh — trustless, every block verified by hash. Phase 1: proves the transfer; not yet in the fetch path. Set a signaling server to enable; applies when the Blocks page reloads.</div>
+        <label for="sig">Signaling server <span style="opacity:.7">(wss:// …/.webrtc)</span></label>
+        <input type="text" id="sig" spellcheck="false" autocomplete="off" placeholder="wss://your.pod/.webrtc">
+        <label for="room">Room</label>
+        <input type="text" id="room" spellcheck="false" autocomplete="off" placeholder="b17c0100b10c48ea1710 (hex, 8–128 chars)">
+        <div class="row" style="margin-top:.7rem"><button class="primary" id="save-peer">Save peering</button><span class="saved" id="saved-peer">saved ✓</span></div>
+        <div class="cache-stats" id="peer-status" style="margin-top:.6rem">—</div>
+      </div>
     </div>
   </div>
 
@@ -422,18 +430,51 @@ async function renderCacheStats() {
   } catch { el.textContent = 'Cache unavailable.'; $('x-cached').textContent = '—'; }
 }
 
+// ---- peering (experimental) ----
+function loadPeerConfig() {
+  const cfg = readCfg();
+  $('sig').value = cfg.webrtc?.signalUrl || '';
+  $('room').value = cfg.webrtc?.room || '';
+}
+$('save-peer').addEventListener('click', () => {
+  const cfg = readCfg();
+  const signalUrl = $('sig').value.trim();
+  const room = $('room').value.trim();
+  if (signalUrl && /^wss?:\/\//.test(signalUrl)) cfg.webrtc = { signalUrl, ...(room ? { room } : {}) };
+  else delete cfg.webrtc;
+  writeCfg(cfg);
+  $('saved-peer').classList.add('show'); setTimeout(() => $('saved-peer').classList.remove('show'), 1600);
+  renderPeerStatus();
+});
+function renderPeerStatus() {
+  const el = $('peer-status');
+  const enabled = !!readCfg().webrtc?.signalUrl;
+  $('peer-sw').classList.toggle('on', enabled);
+  let snap = null;
+  try { snap = JSON.parse(localStorage.getItem('blockhealth.peers') || 'null'); } catch {}
+  if (!enabled) { el.textContent = 'Disabled — set a signaling server above and reload Blocks.'; return; }
+  if (!snap) { el.textContent = 'Configured — open the Blocks page to connect.'; return; }
+  const age = snap.ts ? Math.round((Date.now() - snap.ts) / 1000) : null;
+  el.innerHTML = `<b>${fmt(snap.connected || 0)}</b> peer${snap.connected === 1 ? '' : 's'} connected · `
+    + `<b>${fmt(snap.received || 0)}</b> received · <b>${fmt(snap.served || 0)}</b> served`
+    + (age != null && age < 120 ? ` · updated ${age}s ago` : ' · open Blocks for live status');
+}
+
 // live updates if the Blocks page is open in another tab
 window.addEventListener('storage', (e) => {
+  if (e.key === 'blockhealth.peers') renderPeerStatus();
   if (e.key === 'blockhealth.stats') { renderStats(); renderCacheStats(); }
   if (e.key === 'blockhealth.classified') renderAllTime();
 });
-setInterval(() => { renderStats(); renderCacheStats(); renderAllTime(); renderStorage(); }, 5000);
+setInterval(() => { renderStats(); renderCacheStats(); renderAllTime(); renderStorage(); renderPeerStatus(); }, 5000);
 loadConfig();
+loadPeerConfig();
 renderCacheToggle();
 renderStats();
 renderCacheStats();
 renderAllTime();
 renderStorage();
+renderPeerStatus();
 </script>
 </body>
 </html>
