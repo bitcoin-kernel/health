@@ -118,6 +118,7 @@
     <div class="cell"><div class="k">blocks this session</div><div class="v" id="x-sblocks">—</div></div>
     <div class="cell"><div class="k">transactions decoded</div><div class="v" id="x-txs">—</div></div>
     <div class="cell"><div class="k">block data decoded</div><div class="v" id="x-bytes">—</div></div>
+    <div class="cell"><div class="k">blocks cached</div><div class="v" id="x-cached">—</div></div>
     <div class="cell"><div class="k">served from cache</div><div class="v" id="x-cache">—</div></div>
     <div class="cell"><div class="k">feed age</div><div class="v" id="x-age">—</div></div>
   </div>
@@ -303,13 +304,14 @@ $('clear-cache').addEventListener('click', async (e) => {
 });
 async function renderCacheStats() {
   const el = $('cache-stats');
-  if (!store) { el.innerHTML = 'Not supported in this browser (OPFS unavailable).'; return; }
+  if (!store) { el.innerHTML = 'Not supported in this browser (OPFS unavailable).'; $('x-cached').textContent = 'n/a'; return; }
   try {
     const s = await store.stats();
+    $('x-cached').textContent = fmt(s.count);
     el.innerHTML = s.count
       ? `<b>${fmt(s.count)}</b> blocks · <b>${mb(s.bytes)}</b> MB cached · heights <b>#${fmt(s.minHeight)}</b>–<b>#${fmt(s.maxHeight)}</b>`
       : 'Empty — validated blocks are cached here as you browse.';
-  } catch { el.textContent = 'Cache unavailable.'; }
+  } catch { el.textContent = 'Cache unavailable.'; $('x-cached').textContent = '—'; }
 }
 
 // live updates if the Blocks page is open in another tab
