@@ -29,24 +29,31 @@ export class PeerSource {
     this.onStatus = onStatus;
     this.selfId = 'p' + Math.random().toString(36).slice(2, 12);
     this.peers = new Map();   // peerId -> { dc, pc, offerer, have:Map<hash,height>, inbound }
-    this.pendingPc = new Map(); // offer_id/from -> { pc, dc, offerer }  (pre-hello)
+    this.pendingPc = new Map(); // offer_id -> { pc, dc, offerer }  (pre-hello)
+    this.handledOffers = new Set(); // offer_ids we've already answered (ignore re-announces)
     this.reqSeq = 0;
-    this.served = 0; this.received = 0;
+    this.served = 0; this.received = 0; this.synced = 0;
+    this.syncing = false; this.syncDirty = false; this.syncTimer = null; this.haveTimer = null;
     this.closed = false;
     this.ws = null;
   }
 
-  start() { if (!this.signalUrl) return; this.#connectWs(); }
+  start() {
+    if (!this.signalUrl) return;
+    this.#connectWs();
+    this.haveTimer = setInterval(() => this.#broadcastHave(), 15000); // re-advertise as our cache grows
+  }
   close() {
     this.closed = true;
+    clearInterval(this.haveTimer); clearTimeout(this.syncTimer);
     try { this.ws?.close(); } catch {}
     for (const p of this.peers.values()) { try { p.dc?.close(); } catch {} try { p.pc?.close(); } catch {} }
     this.peers.clear();
   }
   status() {
     return { self: this.selfId, room: this.room, connected: this.peers.size,
-      peers: [...this.peers.keys()], served: this.served, received: this.received,
-      ws: this.ws ? this.ws.readyState : -1 };
+      peers: [...this.peers.keys()], served: this.served, received: this.received, synced: this.synced,
+      syncing: this.syncing, ws: this.ws ? this.ws.readyState : -1 };
   }
   #emit() { try { this.onStatus(this.status()); } catch {} }
 
@@ -82,7 +89,7 @@ export class PeerSource {
     if (this.closed || this.ws?.readyState !== 1) return;
     const pc = new RTCPeerConnection({ iceServers: this.iceServers });
     const dc = pc.createDataChannel('blocks');
-    const offerId = 'o' + Math.random().toString(36).slice(2, 10);
+    const offerId = this.selfId + '.' + Math.random().toString(36).slice(2, 10); // embeds our id so the answerer can compare
     this.pendingPc.set(offerId, { pc, dc, offerer: true });
     this.#wireChannel(dc, pc, true);
     await pc.setLocalDescription(await pc.createOffer());
@@ -94,6 +101,13 @@ export class PeerSource {
   }
 
   async #answer(m) {
+    // Asymmetric handshake: only the higher-id peer answers an offer, so each
+    // pair forms exactly ONE connection (offerer = lower id) — no duplicates, no
+    // dedup race. The offerer's id is embedded in offer_id.
+    const offererId = String(m.offer_id || '').split('.')[0];
+    if (!offererId || this.selfId <= offererId) return;
+    if (this.handledOffers.has(m.offer_id)) return; // ignore re-announced offer
+    this.handledOffers.add(m.offer_id);
     const pc = new RTCPeerConnection({ iceServers: this.iceServers });
     let dc = null;
     pc.ondatachannel = (e) => { dc = e.channel; this.#wireChannel(dc, pc, false); };
@@ -140,7 +154,7 @@ export class PeerSource {
   #onControl(conn, m) {
     switch (m.t) {
       case 'hello': this.#onHello(conn, m.id); break;
-      case 'have': for (const [h, ht] of (m.list || [])) conn.have.set(h, ht); if (conn.peerId) this.peers.get(conn.peerId)?.have && (this.peers.get(conn.peerId).have = conn.have); break;
+      case 'have': for (const [h, ht] of (m.list || [])) conn.have.set(h, ht); if (conn.peerId && this.peers.get(conn.peerId)) this.peers.get(conn.peerId).have = conn.have; this.#scheduleSync(); break;
       case 'getblock': this.#serve(conn, m); break;
       case 'blockmeta': conn.inbound = { reqId: m.id, hash: m.hash, size: m.size, chunks: [], received: 0 }; break;
       case 'blockend': this.#finishInbound(conn); break;
@@ -149,18 +163,42 @@ export class PeerSource {
     }
   }
 
-  // dedup duplicate connections between the same two peers: keep the one whose
-  // OFFERER has the lexicographically-lower id (both sides compute the same).
+  // The asymmetric handshake yields one connection per pair; keep the first and
+  // close any stray duplicate (both sides keep the same physical connection).
   #onHello(conn, peerId) {
     conn.peerId = peerId;
     const existing = this.peers.get(peerId);
-    if (!existing) { this.peers.set(peerId, conn); this.#emit(); return; }
-    const low = this.selfId < peerId ? this.selfId : peerId;
-    const keepThis = (conn.offerer ? this.selfId : peerId) === low;
-    const drop = keepThis ? existing : conn;
-    if (keepThis) this.peers.set(peerId, conn);
-    try { drop.dc?.close(); } catch {} try { drop.pc?.close(); } catch {}
+    if (existing && existing !== conn) { try { conn.dc?.close(); } catch {} try { conn.pc?.close(); } catch {} return; }
+    this.peers.set(peerId, conn);
     this.#emit();
+  }
+
+  #broadcastHave() {
+    for (const p of this.peers.values()) if (p.dc?.readyState === 'open') this.#sendHave(p.dc);
+  }
+
+  // ---- catch-up: pull every block our peers advertise that we don't have ----
+  #scheduleSync() {
+    if (this.syncing) { this.syncDirty = true; return; }
+    clearTimeout(this.syncTimer);
+    this.syncTimer = setTimeout(() => this.#sync(), 300); // coalesce bursts of have messages
+  }
+  async #sync() {
+    if (!this.store || this.closed) return;
+    this.syncing = true; this.syncDirty = false; this.#emit();
+    try {
+      const want = new Map(); // union of all peers' advertised blocks: hash -> height
+      for (const p of this.peers.values()) for (const [h, ht] of p.have) if (!want.has(h)) want.set(h, ht);
+      for (const [hash, height] of want) {
+        if (this.closed) break;
+        if (await this.store.has(height, hash)) continue;         // already cached
+        const bytes = await this.requestBlock(hash, height);       // verified + cached on success
+        if (bytes) { this.synced++; this.#emit(); }
+      }
+    } finally {
+      this.syncing = false; this.#emit();
+      if (this.syncDirty) this.#scheduleSync(); // new advertisements arrived mid-sync
+    }
   }
 
   #sendHave(dc) {
