@@ -57,6 +57,17 @@
   .pchip.pad { background: rgba(120,130,150,.16); color: #98a2b8; }
   .pchip.data { background: rgba(148,163,184,.14); color: #b6bfd6; }
 
+  table.league { width: 100%; border-collapse: collapse; font-size: .86rem; }
+  table.league th { text-align: left; color: var(--muted); font-weight: 500; font-size: .68rem; text-transform: uppercase;
+    letter-spacing: .05em; padding: 0 .6rem .4rem; }
+  table.league th.num, table.league td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  table.league td { padding: .45rem .6rem; border-top: 1px solid var(--border); vertical-align: middle; }
+  table.league tr:first-child td { border-top: none; }
+  table.league .rank { color: var(--muted); font-variant-numeric: tabular-nums; width: 1.6rem; }
+  table.league .share { width: 42%; }
+  table.league .bar { height: 8px; border-radius: 4px; background: #0b101899; overflow: hidden; box-shadow: inset 0 0 0 1px #ffffff10; }
+  table.league .bar > i { display: block; height: 100%; border-radius: 4px; }
+  table.league .pct { color: var(--muted); font-size: .78rem; margin-left: .5rem; }
   .panel { background: var(--panel-bg); border: 1px solid var(--border); border-radius: 12px; padding: 1.2rem 1.3rem; }
   label { display: block; font-size: .82rem; color: var(--muted); margin: .9rem 0 .3rem; }
   label:first-child { margin-top: 0; }
@@ -127,9 +138,9 @@
   <p class="h2note">OP_RETURN outputs across the current window, by class. <a href="./protocols.html">What are these? →</a></p>
   <div class="breakdown" id="breakdown"><span class="empty">No data yet.</span></div>
 
-  <h2>Non-standard datacarrier <span style="font-size:.7rem;color:var(--muted);font-weight:400">— all-time</span></h2>
+  <h2>Non-standard datacarrier <span style="font-size:.7rem;color:var(--muted);font-weight:400">— all-time league</span></h2>
   <p class="h2note" id="alltime-note">OP_RETURNs over the 80/83-byte standard, by protocol, across every block you've cached.</p>
-  <div class="breakdown" id="alltime"><span class="empty">No cached history yet.</span></div>
+  <div id="alltime"><span class="empty">No cached history yet.</span></div>
 
   <h2>Feed &amp; source</h2>
   <p class="h2note">Which NIP-333 publisher and relays the Blocks page follows. Changes apply when the Blocks page reloads.</p>
@@ -230,26 +241,48 @@ function renderStats() {
   $('breakdown').innerHTML = chips.length ? chips.join('') : '<span class="empty">No OP_RETURN datacarrier outputs seen yet.</span>';
 }
 
-// ---- all-time non-standard datacarrier (from the persistent ledger) ----
+// ---- all-time non-standard datacarrier league (from the persistent ledger) ----
 // ledger entry: [height, txCount, nonStandardTotal, [opnet,alkanes,runes,protostone,powme,bridge,padding]]
 const NS_ORDER = ['opnet', 'alkanes', 'runes', 'protostone', 'powme', 'bridge', 'padding'];
+const BAR = { opnet: '#8fb4ff', alkanes: '#5eead4', runes: '#b794f6', protostone: '#94a3b8',
+  powme: '#f7931a', bridge: '#f2a3c7', padding: '#788296', plain: '#9aa4bd' };
 function renderAllTime() {
   let led = {};
   try { led = JSON.parse(localStorage.getItem('blockhealth.classified') || '{}'); } catch { led = {}; }
   const entries = Object.values(led);
   const el = $('alltime');
-  if (!entries.length) { el.innerHTML = '<span class="empty">No cached history yet — browse the Blocks page to build it.</span>'; $('alltime-note').textContent = 'OP_RETURNs over the 80/83-byte standard, by protocol, across every block you\'ve cached.'; return; }
+  if (!entries.length) {
+    el.innerHTML = '<span class="empty">No cached history yet — browse the Blocks page to build it.</span>';
+    $('alltime-note').textContent = "OP_RETURNs over the 80/83-byte standard, by protocol, across every block you've cached.";
+    return;
+  }
   const per = Object.fromEntries(NS_ORDER.map((k) => [k, 0]));
   let total = 0;
   for (const e of entries) { total += e[2] || 0; (e[3] || []).forEach((v, i) => { per[NS_ORDER[i]] += v || 0; }); }
-  const named = NS_ORDER.reduce((s, k) => s + per[k], 0);
-  const plain = Math.max(0, total - named);
-  const chips = NS_ORDER.filter((k) => per[k] > 0).map((k) => {
-    const [icon, label, cls] = CHIP[k];
-    return `<span class="pchip ${cls}">${icon} ${fmt(per[k])} ${label}</span>`;
-  });
-  if (plain > 0) chips.push(`<span class="pchip data">· ${fmt(plain)} plain data</span>`);
-  el.innerHTML = chips.length ? chips.join('') : '<span class="empty">No non-standard datacarrier in your cached blocks.</span>';
+  const plain = Math.max(0, total - NS_ORDER.reduce((s, k) => s + per[k], 0));
+
+  const rows = NS_ORDER.map((k) => ({ k, icon: CHIP[k][0], label: CHIP[k][1], cls: CHIP[k][2], n: per[k] }))
+    .concat([{ k: 'plain', icon: '·', label: 'plain data', cls: 'data', n: plain }])
+    .filter((r) => r.n > 0)
+    .sort((a, b) => b.n - a.n);
+
+  const max = rows.length ? rows[0].n : 1;
+  const body = rows.map((r, i) => {
+    const pct = total ? (100 * r.n / total) : 0;
+    const w = max ? (100 * r.n / max) : 0;
+    return `<tr>
+      <td class="rank">${i + 1}</td>
+      <td><span class="pchip ${r.cls}">${r.icon} ${r.label}</span></td>
+      <td class="num"><b>${fmt(r.n)}</b></td>
+      <td class="share"><div class="bar"><i style="width:${w.toFixed(1)}%;background:${BAR[r.k] || BAR.plain}"></i></div></td>
+      <td class="num"><span class="pct">${pct < 1 && pct > 0 ? '<1' : Math.round(pct)}%</span></td>
+    </tr>`;
+  }).join('');
+
+  el.innerHTML = rows.length
+    ? `<table class="league"><thead><tr><th class="rank">#</th><th>protocol</th><th class="num">count</th><th class="share">share</th><th class="num"></th></tr></thead><tbody>${body}</tbody></table>`
+    : '<span class="empty">No non-standard datacarrier in your cached blocks.</span>';
+
   const heights = entries.map((e) => e[0]);
   $('alltime-note').innerHTML = `<b>${fmt(total)}</b> non-standard OP_RETURNs across <b>${fmt(entries.length)}</b> cached blocks `
     + `(heights #${fmt(Math.min(...heights))}–#${fmt(Math.max(...heights))})${entries.length >= 5000 ? ', capped at the most recent 5,000' : ''}.`;
