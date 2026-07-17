@@ -294,7 +294,7 @@
 import { Codec } from './engine/codec/codec.js';
 import { verifyNostrEvent } from './engine/codec/nostr.js';
 import { BlockStore, opfsAvailable } from './block-store.js';
-import { PeerSource } from './peer-source.js';
+import { PeerSource, iceServersFrom } from './peer-source.js';
 
 const DEFAULT_RELAYS = ['wss://relay.damus.io', 'wss://nos.lol', 'wss://relay.primal.net'];
 const DEFAULT_PUBKEY = 'cccccc0a8338a4aba51691f309f2f892c6c58f655a1ec3fc30522c894c166d9c';
@@ -445,7 +445,7 @@ function pump() {
 
 // ---- state ----
 const blocks = new Map();  // hash -> { height, header, hex, el, state, result }
-let tipHeight = null, lastEventAt = null, selected = null;
+let tipHeight = null, lastEventAt = null, lastContent = null, selected = null;
 let autoFollow = true; // keep the detail panel on the tip until the user picks a block
 
 // ---- nostr ----
@@ -458,7 +458,13 @@ function fetchFromRelay(url) {
     ws.onopen = () => ws.send(JSON.stringify(['REQ', 'bh', { kinds: [KIND], authors: [PUBKEY], '#d': [NETWORK], limit: 1 }]));
     ws.onmessage = (ev) => {
       let m; try { m = JSON.parse(ev.data); } catch { return; }
-      if (m[0] === 'EVENT') { const e = m[2]; if (!newest || e.created_at > newest.created_at) newest = e; }
+      if (m[0] === 'EVENT') {
+        const e = m[2];
+        // never trust relay filtering — re-check kind, author and network ourselves
+        const d = e.tags?.find((t) => t[0] === 'd')?.[1];
+        if (e.kind === KIND && e.pubkey === PUBKEY && d === NETWORK
+            && (!newest || e.created_at > newest.created_at)) newest = e;
+      }
       else if (m[0] === 'EOSE') done(newest);
     };
     ws.onerror = () => done(newest);
@@ -481,7 +487,12 @@ function ingest(event) {
   if (!/^[0-9a-f]*$/.test(c) || c.length % HEADER_HEX !== 0 || !c.length) { setStatus('malformed event content', 'err'); return; }
   const tip = parseInt(event.tags.find((t) => t[0] === 'tip')?.[1] ?? '', 10);
   if (!Number.isFinite(tip)) { setStatus('event missing tip tag', 'err'); return; }
-  if (tipHeight != null && tip <= tipHeight) { lastEventAt = event.created_at; refreshAge(); setStatus('live · up to date', 'live'); return; }
+  if (tipHeight != null && tip <= tipHeight) {
+    // a same-height event with different headers from a strictly newer event is
+    // a reorg replacement — re-ingest it; anything else is old news from a slow relay
+    const reorg = tip === tipHeight && c !== lastContent && event.created_at > lastEventAt;
+    if (!reorg) { lastEventAt = Math.max(lastEventAt, event.created_at); refreshAge(); setStatus('live · up to date', 'live'); return; }
+  }
 
   const n = c.length / HEADER_HEX;
   const parsed = [];
@@ -498,7 +509,7 @@ function ingest(event) {
   }
   if (!chainOk) { setStatus('header PoW / linkage check FAILED', 'err'); }
 
-  tipHeight = tip; lastEventAt = event.created_at;
+  tipHeight = tip; lastEventAt = Math.max(lastEventAt || 0, event.created_at); lastContent = c;
   $('s-tip').textContent = '#' + fmt(tip);
   setStatus(chainOk ? 'live · headers verified' : 'header verification failed', chainOk ? 'live' : 'err');
 
@@ -556,8 +567,8 @@ function srcDetail(source) {
 // cache) can't relabel a peer/explorer block as "cache".
 const blockSource = new Map(); // hash -> 'peer' | 'net' | 'cache'
 function setSource(hash, s) {
-  if (blockSource.get(hash) === 'peer') return;   // peer is terminal
-  if (s === 'peer' || !blockSource.has(hash)) blockSource.set(hash, s);
+  if (blockSource.get(hash) !== 'peer'            // peer is terminal
+      && (s === 'peer' || !blockSource.has(hash))) blockSource.set(hash, s);
   return blockSource.get(hash);
 }
 
@@ -783,6 +794,7 @@ let peerSource = null;
 if (PEERING_ENABLED) {
   peerSource = new PeerSource({
     signalUrl: CFG.webrtc.signalUrl, room: CFG.webrtc.room || 'b17c0100b10c48ea1710',
+    iceServers: iceServersFrom(CFG.webrtc),
     store: new BlockStore(),
     onStatus: (s) => {
       try { localStorage.setItem('blockhealth.peers', JSON.stringify({ ts: Date.now(), ...s })); } catch {}

@@ -193,7 +193,7 @@
       <div class="sw" id="peer-sw"></div>
       <div style="flex:1">
         <div class="t-name">Peer over WebRTC <span class="soon-tag" style="background:rgba(0,221,255,.18);color:#7fe3ff">experimental</span></div>
-        <div class="t-desc">Fetch blocks directly from other browsers (and serve yours) over a WebRTC mesh — trustless, every block verified by hash. Phase 1: proves the transfer; not yet in the fetch path. Set a signaling server to enable; applies when the Blocks page reloads.</div>
+        <div class="t-desc">Fetch blocks directly from other browsers (and serve yours) over a WebRTC mesh — trustless, every block verified by hash. In the fetch path: local cache, then a peer, then the explorer as fallback. Set a signaling server to enable; applies when the Blocks page reloads.</div>
         <label for="sig">Signaling server <span style="opacity:.7">(wss:// …/.webrtc)</span></label>
         <input type="text" id="sig" spellcheck="false" autocomplete="off" placeholder="wss://your.pod/.webrtc">
         <label for="room">Room</label>
@@ -212,7 +212,7 @@
 
 <script type="module">
 import { BlockStore, opfsAvailable } from './block-store.js';
-import { PeerSource } from './peer-source.js';
+import { PeerSource, iceServersFrom } from './peer-source.js';
 const DEFAULT_PUBKEY = 'cccccc0a8338a4aba51691f309f2f892c6c58f655a1ec3fc30522c894c166d9c';
 const DEFAULT_RELAYS = ['wss://relay.damus.io', 'wss://nos.lol', 'wss://relay.primal.net'];
 const $ = (id) => document.getElementById(id);
@@ -441,8 +441,10 @@ $('save-peer').addEventListener('click', () => {
   const cfg = readCfg();
   const signalUrl = $('sig').value.trim();
   const room = $('room').value.trim();
-  if (signalUrl && /^wss?:\/\//.test(signalUrl)) cfg.webrtc = { signalUrl, ...(room ? { room } : {}) };
-  else delete cfg.webrtc;
+  if (signalUrl && /^wss?:\/\//.test(signalUrl)) {
+    cfg.webrtc = { ...cfg.webrtc, signalUrl }; // keep TURN fields a peering link may have set
+    if (room) cfg.webrtc.room = room; else delete cfg.webrtc.room;
+  } else delete cfg.webrtc;
   writeCfg(cfg);
   $('saved-peer').classList.add('show'); setTimeout(() => $('saved-peer').classList.remove('show'), 1600);
   renderPeerStatus();
@@ -471,6 +473,7 @@ function ensurePeering() {
     if (peerSource) peerSource.close();
     peerSource = new PeerSource({
       signalUrl: cfg.signalUrl, room: cfg.room || 'b17c0100b10c48ea1710', store,
+      iceServers: iceServersFrom(cfg),
       onStatus: (s) => { liveStatus = s; try { localStorage.setItem('blockhealth.peers', JSON.stringify({ ts: Date.now(), ...s })); } catch {} renderPeerStatus(); },
     });
     peerSource._sig = cfg.signalUrl; peerSource._room = cfg.room || '';

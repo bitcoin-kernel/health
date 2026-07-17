@@ -41,11 +41,11 @@ function opReturnDataBytes(spkHex) {
     const op = b[i++];
     let len;
     if (op >= 0x01 && op <= 0x4b) len = op;
-    else if (op === 0x4c) { len = b[i]; i += 1; }
-    else if (op === 0x4d) { len = b[i] | (b[i + 1] << 8); i += 2; }
-    else if (op === 0x4e) { len = b[i] | (b[i + 1] << 8) | (b[i + 2] << 16) | (b[i + 3] << 24); i += 4; }
+    else if (op === 0x4c) { if (i + 1 > b.length) break; len = b[i]; i += 1; }
+    else if (op === 0x4d) { if (i + 2 > b.length) break; len = b[i] | (b[i + 1] << 8); i += 2; }
+    else if (op === 0x4e) { if (i + 4 > b.length) break; len = b[i] | (b[i + 1] << 8) | (b[i + 2] << 16) | (b[i + 3] << 24); i += 4; }
     else continue; // OP_N / other opcodes carry no push payload
-    data += len; i += len;
+    data += Math.min(len, b.length - i); i += len; // truncated push: count only the bytes present
   }
   return data;
 }
@@ -277,6 +277,7 @@ self.onmessage = async (ev) => {
       return;
     }
     if (msg.type === 'validate') {
+      if (!be) throw new Error('validator not initialised — engine schemas failed to load');
       const { hash, height } = msg;
       // Block-data source priority: local OPFS cache → a WebRTC peer → the
       // explorer. Peers cut the explorer out of the path once the swarm holds a
