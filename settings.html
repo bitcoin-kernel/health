@@ -214,6 +214,7 @@
 
 <script type="module">
 import { BlockStore, opfsAvailable } from './block-store.js';
+import { OpfsHeaderBackend } from './header-store.js';
 import { PeerSource, iceServersFrom } from './peer-source.js';
 const DEFAULT_PUBKEY = 'cccccc0a8338a4aba51691f309f2f892c6c58f655a1ec3fc30522c894c166d9c';
 const DEFAULT_RELAYS = ['wss://relay.damus.io', 'wss://nos.lol', 'wss://relay.primal.net'];
@@ -416,6 +417,7 @@ $('budget').addEventListener('change', async () => {
 $('clear-cache').addEventListener('click', async (e) => {
   e.stopPropagation();
   try { localStorage.removeItem('blockhealth.results'); localStorage.removeItem('blockhealth.classified'); } catch {} // result cache + all-time ledger
+  try { await new OpfsHeaderBackend().clear(); } catch {} // header chain too
   if (store) { await store.clear(); await renderCacheStats(); }
   renderAllTime();
   renderStorage();
@@ -444,9 +446,14 @@ async function renderCacheStats() {
   try {
     const s = await store.stats();
     $('x-cached').textContent = fmt(s.count);
-    el.innerHTML = s.count
+    let line = s.count
       ? `<b>${fmt(s.count)}</b> blocks · <b>${mb(s.bytes)}</b> MB of <b>${fmt(budgetMB())}</b> MB budget · heights <b>#${fmt(s.minHeight)}</b>–<b>#${fmt(s.maxHeight)}</b>`
       : 'Empty — validated blocks are cached here as you browse.';
+    try { // verified header chain (never pruned — 80 B/block)
+      const hm = await new OpfsHeaderBackend().readMeta();
+      if (hm && hm.count) line += `<br>headers <b>#${fmt(hm.start)}</b>–<b>#${fmt(hm.start + hm.count - 1)}</b> · <b>${fmt(hm.count)}</b> verified (${(hm.count * 80 / 1e6).toFixed(2)} MB, shared with peers)`;
+    } catch {}
+    el.innerHTML = line;
   } catch { el.textContent = 'Cache unavailable.'; $('x-cached').textContent = '—'; }
 }
 

@@ -13,6 +13,7 @@ import { MeshCore } from './webrtc-mesh.js';
 
 const CHUNK = 64 * 1024;
 const HIGH_WATER = 4 * 1024 * 1024;
+const HDR_BATCH = 500; // headers per getheaders reply (500 × 160 hex chars = 80 KB message)
 
 // block hash = dsha256 of the 80 header bytes, byte-reversed (display order)
 export const blockHashOf = (bytes) => reverseHex(dsha256(bytes.subarray(0, 80)));
@@ -28,9 +29,11 @@ export function iceServersFrom(cfg) {
 }
 
 export class PeerSource {
-  constructor({ signalUrl, room = 'b17c0100b10c48ea1710', store, cacheBudget = 0, iceServers, onStatus = () => {}, onBlock = () => {} }) {
+  constructor({ signalUrl, room = 'b17c0100b10c48ea1710', store, cacheBudget = 0, headers = null, iceServers, onStatus = () => {}, onBlock = () => {}, onTip = () => {} }) {
     this.store = store;
     this.cacheBudget = cacheBudget; // rolling byte budget; 0 = unlimited
+    this.headers = headers;         // HeaderChain — serves/advertises the header chain when set
+    this.onTip = onTip;             // (peerId, {height, hash, start}) on a peer's header-tip advert
     this.pruneTimer = null;
     this.onStatus = onStatus;
     this.onBlock = onBlock; // (hash, height) when a block's bytes arrive from a peer
@@ -71,7 +74,8 @@ export class PeerSource {
   _onDrop(id) {
     const st = this.state.get(id);
     this.state.delete(id);
-    if (st?.inboundReq) st.inboundReq.resolve(null); // don't leave a request hanging until its timeout
+    if (st?.inboundReq) st.inboundReq.resolve(null); // don't leave requests hanging until their timeouts
+    if (st?.hdrReq) { const r = st.hdrReq; st.hdrReq = null; r.resolve(null); }
   }
   _onData(id, data) {
     const st = this.state.get(id); if (!st) return;
@@ -90,8 +94,25 @@ export class PeerSource {
 
   _onControl(id, st, m) {
     switch (m.t) {
-      case 'have': for (const [h, ht] of (m.list || [])) st.have.set(h, ht); this._scheduleSync(); break;
+      case 'have':
+        for (const [h, ht] of (m.list || [])) st.have.set(h, ht);
+        if (m.tip && Number.isInteger(m.tip.height) && typeof m.tip.hash === 'string') {
+          st.tip = m.tip;
+          try { this.onTip(id, m.tip); } catch {}
+        }
+        this._scheduleSync();
+        break;
       case 'getblock': this._serve(id, st, m); break;
+      case 'getheaders': this._serveHeaders(id, m); break;
+      case 'headers': {
+        const r = st.hdrReq;
+        if (!r) break;
+        st.hdrReq = null;
+        const ok = Number.isInteger(m.start) && typeof m.hex === 'string' && m.hex.length > 0
+          && m.hex.length % 160 === 0 && m.hex.length <= HDR_BATCH * 160 && /^[0-9a-f]+$/.test(m.hex);
+        r.resolve(ok ? { start: m.start, count: m.hex.length / 160, hex: m.hex } : null);
+        break;
+      }
       case 'blockmeta': {
         // only buffer a transfer we asked for, with a sane size (≤ 4 MB consensus max + slack)
         const req = st.inboundReq;
@@ -107,7 +128,46 @@ export class PeerSource {
 
   _sendHave(id) {
     if (!this.store) return;
-    this.store.list().then((l) => this._send(id, { t: 'have', list: l.slice(-100).map((b) => [b.hash, b.height]) })).catch(() => {});
+    this.store.list().then((l) => {
+      const msg = { t: 'have', list: l.slice(-100).map((b) => [b.hash, b.height]) };
+      const s = this.headers?.stats();
+      if (s) msg.tip = { height: s.tip, hash: s.tipHash, start: s.start }; // header-chain advert (self-certifying on receipt)
+      this._send(id, msg);
+    }).catch(() => {});
+  }
+
+  // ---- header chain sharing (headers are self-certifying: the receiving
+  // side re-validates PoW/linkage/difficulty, so serving needs no trust) ----
+  async _serveHeaders(id, m) {
+    let r = null;
+    if (this.headers && Number.isInteger(m.from)) {
+      const count = Math.min(Math.max(1, m.count | 0), HDR_BATCH);
+      try { r = await this.headers.getRangeHex(m.from, count); } catch {}
+    }
+    this._send(id, r ? { t: 'headers', start: r.start, hex: r.hex } : { t: 'headers', start: null, hex: '' });
+  }
+
+  bestTip() {
+    let best = null;
+    for (const s of this.state.values()) if (s.tip && (!best || s.tip.height > best.height)) best = s.tip;
+    return best;
+  }
+
+  // Fetch up to `count` headers from any peer advertising a header tip.
+  // Resolves {start, count, hex} (validated shape only — content is verified
+  // by HeaderChain.extend on the caller's side) or null.
+  requestHeaders(from, count = HDR_BATCH, timeoutMs = 10000) {
+    for (const [id, st] of this.state) {
+      if (st.tip && !st.hdrReq && this.core.channel(id)?.readyState === 'open') {
+        return new Promise((resolve) => {
+          const done = (v) => { clearTimeout(timer); resolve(v); };
+          const timer = setTimeout(() => { st.hdrReq = null; done(null); }, timeoutMs);
+          st.hdrReq = { resolve: done };
+          this._send(id, { t: 'getheaders', from, count });
+        });
+      }
+    }
+    return Promise.resolve(null);
   }
   _broadcastHave() { for (const id of this.state.keys()) this._sendHave(id); }
 

@@ -293,7 +293,9 @@
 <script type="module">
 import { Codec } from './engine/codec/codec.js';
 import { verifyNostrEvent } from './engine/codec/nostr.js';
+import { HeaderEngine } from './engine/codec/headers.js';
 import { BlockStore, opfsAvailable } from './block-store.js';
+import { HeaderChain, OpfsHeaderBackend, MemoryHeaderBackend } from './header-store.js';
 import { PeerSource, iceServersFrom } from './peer-source.js';
 
 const DEFAULT_RELAYS = ['wss://relay.damus.io', 'wss://nos.lol', 'wss://relay.primal.net'];
@@ -409,10 +411,85 @@ const PROTO = { opnet: { label: 'OP_NET', icon: '◈', cls: 'opnet' }, alkanes: 
 const setStatus = (text, cls) => { $('statusText').textContent = text; $('pulse').className = 'pulse' + (cls ? ' ' + cls : ''); };
 $('pub').textContent = `Publisher ${PUBKEY.slice(0, 8)}…${PUBKEY.slice(-4)}.`;
 
-// ---- lightweight codec on the main thread (headers only) ----
+// ---- lightweight codec + header engine on the main thread ----
 const jl = (n) => fetch(`./engine/schema/${n}.jsonld`).then((r) => r.json());
-const [core, proof, p2p] = await Promise.all([jl('core'), jl('proof'), jl('p2p')]);
+const [core, proof, p2p, chainSchema, validateSchema] = await Promise.all([jl('core'), jl('proof'), jl('p2p'), jl('chain'), jl('validate')]);
 const codec = new Codec(core, proof, p2p);
+
+// Persistent verified header chain (80 B/block ≈ 4 MB/year — never pruned).
+// Every source — nostr window, peers, esplora gap-fill — feeds the same
+// HeaderEngine validation (PoW, linkage, difficulty retarget, MTP), so headers
+// are trustless to share; the mesh advertises and serves this chain.
+const headerEngine = HeaderEngine.fromSchemas(codec, chainSchema, validateSchema, 'btc:mainnet');
+const headerChain = new HeaderChain({
+  codec, engine: headerEngine,
+  backend: (CACHE_ENABLED && opfsAvailable()) ? new OpfsHeaderBackend() : new MemoryHeaderBackend(),
+});
+await headerChain.init();
+
+const nowSec = () => Math.floor(Date.now() / 1000);
+let hdrBusy = false; // one header-sync/gap-fill operation at a time
+async function extendHeaderChain(hexes, startHeight) {
+  try {
+    const res = await headerChain.extend(hexes, startHeight, { now: nowSec() });
+    if (res.gap && !hdrBusy) {
+      hdrBusy = true;
+      try { await fillHeaderGap(res.gap, hexes, startHeight); } finally { hdrBusy = false; }
+    }
+  } catch {}
+}
+// A gap between our stored tip and fresh headers: pull the missing range from
+// peers first, then esplora (both re-validated — headers are self-certifying),
+// and if it's unfillable, re-anchor at the fresh window rather than stall.
+async function fillHeaderGap(gap, pendingHexes, pendingStart) {
+  for (let from = gap.from; from <= gap.to;) {
+    const r = peerSource ? await peerSource.requestHeaders(from, Math.min(500, gap.to - from + 1)) : null;
+    if (!r || r.start > from) break;
+    const res = await headerChain.extend(splitHeaders(r.hex), r.start, { now: nowSec() });
+    if (!res.ok || !res.appended) break;
+    from = headerChain.tipHeight + 1;
+  }
+  let from = headerChain.tipHeight + 1;
+  if (from <= gap.to && gap.to - from < 432) { // ≤ ~3 days: fetch block-by-block from esplora
+    try {
+      const hexes = [];
+      for (let h = from; h <= gap.to; h++) {
+        const hash = (await (await fetch(`https://mempool.space/api/block-height/${h}`)).text()).trim();
+        if (!/^[0-9a-f]{64}$/.test(hash)) throw new Error('bad hash');
+        hexes.push((await (await fetch(`https://mempool.space/api/block/${hash}/header`)).text()).trim());
+      }
+      await headerChain.extend(hexes, from, { now: nowSec() });
+    } catch { /* fall through to re-anchor check */ }
+  }
+  if (headerChain.tipHeight == null || headerChain.tipHeight < gap.to) {
+    console.warn(`[headers] gap ${gap.from}–${gap.to} unfillable — re-anchoring chain at #${pendingStart}`);
+    await headerChain.reset();
+  }
+  await headerChain.extend(pendingHexes, pendingStart, { now: nowSec() });
+}
+const splitHeaders = (hex) => { const out = []; for (let i = 0; i < hex.length; i += 160) out.push(hex.slice(i, i + 160)); return out; };
+// A peer advertises a higher header tip than ours (or we hold nothing):
+// walk their chain into ours, batch by batch, with an 11-header overlap so
+// shallow reorgs are caught by the work comparison.
+async function syncHeadersFromPeers() {
+  if (!peerSource || hdrBusy) return;
+  hdrBusy = true;
+  try {
+    for (let rounds = 0; rounds < 40; rounds++) { // ≤ 20k headers per pass
+      const best = peerSource.bestTip();
+      if (!best) return;
+      const myTip = headerChain.tipHeight;
+      if (myTip != null && best.height <= myTip) return;
+      const from = myTip == null
+        ? (Number.isInteger(best.start) ? best.start : best.height - 11)
+        : Math.max(headerChain.startHeight, myTip - 11);
+      const r = await peerSource.requestHeaders(Math.max(0, from));
+      if (!r) return;
+      const res = await headerChain.extend(splitHeaders(r.hex), r.start, { now: nowSec() });
+      if (!res.ok || (!res.appended && headerChain.tipHeight === myTip)) return;
+    }
+  } finally { hdrBusy = false; }
+}
 
 // ---- validation worker POOL (entirely off the critical path) ----
 // Tiles paint from the headers alone; full-block download + consensus
@@ -514,6 +591,7 @@ function ingest(event) {
   if (!chainOk) { setStatus('header PoW / linkage check FAILED', 'err'); }
 
   tipHeight = tip; lastEventAt = Math.max(lastEventAt || 0, event.created_at); lastContent = c;
+  if (chainOk) extendHeaderChain(parsed.map((b) => b.hex), tip - n + 1); // grow the persistent verified header chain
   $('s-tip').textContent = '#' + fmt(tip);
   setStatus(chainOk ? 'live · headers verified' : 'header verification failed', chainOk ? 'live' : 'err');
 
@@ -800,6 +878,8 @@ if (PEERING_ENABLED) {
     signalUrl: CFG.webrtc.signalUrl, room: CFG.webrtc.room || 'b17c0100b10c48ea1710',
     iceServers: iceServersFrom(CFG.webrtc),
     store: new BlockStore(), cacheBudget: CACHE_BUDGET,
+    headers: headerChain,                       // serve/advertise our verified header chain
+    onTip: () => syncHeadersFromPeers(),        // pull ahead when a peer knows more chain
     onStatus: (s) => {
       try { localStorage.setItem('blockhealth.peers', JSON.stringify({ ts: Date.now(), ...s })); } catch {}
       const el = $('peerind');
