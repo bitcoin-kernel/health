@@ -24,9 +24,9 @@ export async function toHexResource(room) {
 function iceComplete(pc, ms = 8000) {
   return new Promise((res) => {
     if (pc.iceGatheringState === 'complete') return res();
-    const check = () => { if (pc.iceGatheringState === 'complete') { pc.removeEventListener('icegatheringstatechange', check); res(); } };
+    const t = setTimeout(() => { pc.removeEventListener('icegatheringstatechange', check); res(); }, ms);
+    const check = () => { if (pc.iceGatheringState === 'complete') { clearTimeout(t); pc.removeEventListener('icegatheringstatechange', check); res(); } };
     pc.addEventListener('icegatheringstatechange', check);
-    setTimeout(res, ms);
   });
 }
 
@@ -130,6 +130,8 @@ export class MeshCore {
         await pc.setLocalDescription(await pc.createAnswer());
         await iceComplete(pc);
         this._ws({ type: 'answer', resource: this.resource, to: m.from, offer_id: m.offer_id, sdp: pc.localDescription.sdp });
+        // if this answer never turns into a registered peer, reap the attempt
+        setTimeout(() => { if (this.peers.get(m.from)?.pc !== pc) { try { pc.close(); } catch {} } }, 60_000);
       } catch {}
     } else if (m.type === 'answer' && m.offer_id && typeof m.sdp === 'string') {
       const pc = this.pending.get(m.offer_id);
@@ -145,9 +147,23 @@ export class MeshCore {
     ch.binaryType = 'arraybuffer';
     ch.bufferedAmountLowThreshold = 256 * 1024;
     const entry = { id, pc, ch, pair: null };
-    const register = () => { this.peers.set(id, entry); this.onPeer(id); this.onChange(); };
-    const drop = () => { if (this.peers.get(id) === entry) { this.peers.delete(id); this.onDrop(id); this.onChange(); } };
-    if (ch.readyState === 'open') register(); else ch.addEventListener('open', register);
+    const register = () => {
+      const old = this.peers.get(id);
+      if (old && old !== entry) { try { old.ch?.close(); } catch {} try { old.pc.close(); } catch {} } // replaced — don't leak the pc
+      this.peers.set(id, entry); this.onPeer(id); this.onChange();
+    };
+    const drop = () => {
+      if (this.peers.get(id) === entry) { this.peers.delete(id); this.onDrop(id); this.onChange(); }
+      // this connection's life is over either way — release its native resources
+      try { entry.ch?.close(); } catch {}
+      try { entry.pc.close(); } catch {}
+    };
+    if (ch.readyState === 'open') register();
+    else {
+      ch.addEventListener('open', register);
+      // a channel that hasn't opened in 60s never will — reap the attempt
+      setTimeout(() => { if (this.peers.get(id)?.pc !== pc) { try { ch.close(); } catch {} try { pc.close(); } catch {} } }, 60_000);
+    }
     ch.addEventListener('close', drop);
     ch.onmessage = (ev) => this.onData(id, ev.data);
     pc.onconnectionstatechange = () => { if (['failed', 'disconnected', 'closed'].includes(pc.connectionState)) drop(); };

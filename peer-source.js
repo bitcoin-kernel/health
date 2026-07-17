@@ -17,6 +17,16 @@ const HIGH_WATER = 4 * 1024 * 1024;
 // block hash = dsha256 of the 80 header bytes, byte-reversed (display order)
 export const blockHashOf = (bytes) => reverseHex(dsha256(bytes.subarray(0, 80)));
 
+// Build an RTCPeerConnection iceServers list from a saved webrtc config:
+// STUN always, plus the configured TURN server (with credentials) if any.
+// undefined (no TURN) lets MeshCore fall back to its STUN-only default.
+export function iceServersFrom(cfg) {
+  if (!cfg?.turn) return undefined;
+  const turn = { urls: cfg.turn };
+  if (cfg.turnUser) { turn.username = cfg.turnUser; turn.credential = cfg.turnCred || ''; }
+  return [{ urls: 'stun:stun.l.google.com:19302' }, turn];
+}
+
 export class PeerSource {
   constructor({ signalUrl, room = 'b17c0100b10c48ea1710', store, iceServers, onStatus = () => {}, onBlock = () => {} }) {
     this.store = store;
@@ -51,11 +61,23 @@ export class PeerSource {
 
   // ---- peer lifecycle (from MeshCore) ----
   _onPeer(id) { this.state.set(id, { have: new Map(), inbound: null, inboundReq: null }); this._sendHave(id); this._scheduleSync(); }
-  _onDrop(id) { this.state.delete(id); }
+  _onDrop(id) {
+    const st = this.state.get(id);
+    this.state.delete(id);
+    if (st?.inboundReq) st.inboundReq.resolve(null); // don't leave a request hanging until its timeout
+  }
   _onData(id, data) {
     const st = this.state.get(id); if (!st) return;
     if (typeof data === 'string') { let m; try { m = JSON.parse(data); } catch { return; } this._onControl(id, st, m); }
-    else if (st.inbound) { const u8 = new Uint8Array(data); st.inbound.chunks.push(u8); st.inbound.received += u8.length; }
+    else if (st.inbound) {
+      const u8 = new Uint8Array(data);
+      st.inbound.chunks.push(u8); st.inbound.received += u8.length;
+      if (st.inbound.received > st.inbound.size) { // lying peer: more bytes than advertised
+        st.inbound = null;
+        const req = st.inboundReq;
+        if (req) { st.inboundReq = null; req.resolve(null); }
+      }
+    }
   }
   _send(id, obj) { this.core.send(id, JSON.stringify(obj)); }
 
@@ -63,7 +85,13 @@ export class PeerSource {
     switch (m.t) {
       case 'have': for (const [h, ht] of (m.list || [])) st.have.set(h, ht); this._scheduleSync(); break;
       case 'getblock': this._serve(id, st, m); break;
-      case 'blockmeta': st.inbound = { hash: m.hash, size: m.size, chunks: [], received: 0 }; break;
+      case 'blockmeta': {
+        // only buffer a transfer we asked for, with a sane size (≤ 4 MB consensus max + slack)
+        const req = st.inboundReq;
+        st.inbound = (req && req.hash === m.hash && m.size >= 80 && m.size <= 4_200_000)
+          ? { hash: m.hash, size: m.size, chunks: [], received: 0 } : null;
+        break;
+      }
       case 'blockend': this._finishInbound(id, st); break;
       case 'noblock': { const p = st.inboundReq; if (p) { st.inboundReq = null; p.resolve(null); } break; }
       default: break;
@@ -87,7 +115,10 @@ export class PeerSource {
     if (!ch) return;
     for (let off = 0; off < bytes.length; off += CHUNK) {
       if (ch.readyState !== 'open') return;
-      if (ch.bufferedAmount > HIGH_WATER) await new Promise((r) => ch.addEventListener('bufferedamountlow', r, { once: true }));
+      if (ch.bufferedAmount > HIGH_WATER) await new Promise((r) => {
+        ch.addEventListener('bufferedamountlow', r, { once: true });
+        ch.addEventListener('close', r, { once: true }); // a closed channel never drains
+      });
       ch.send(bytes.subarray(off, off + CHUNK));
     }
     this._send(id, { t: 'blockend', id: m.id });
@@ -102,7 +133,9 @@ export class PeerSource {
     const bytes = new Uint8Array(inb.received);
     let off = 0; for (const c of inb.chunks) { bytes.set(c, off); off += c.length; }
     if (bytes.length < 80 || blockHashOf(bytes) !== req.hash) { req.resolve(null); return; } // liar / corrupt → reject
-    if (this.store && req.height != null) this.store.put(req.height, req.hash, bytes).catch(() => {});
+    if (this.store && req.height != null) this.store.put(req.height, req.hash, bytes).catch((e) => {
+      if (!this._putWarned) { this._putWarned = true; console.warn('[peer-source] block store write failed — catch-up will not re-pull this session', e); }
+    });
     this.receivedHashes.add(req.hash); // provenance: this block came from a peer
     this.received++; this._emit();
     try { this.onBlock(req.hash, req.height); } catch {}
@@ -138,6 +171,7 @@ export class PeerSource {
       for (const s of this.state.values()) for (const [h, ht] of s.have) if (!want.has(h)) want.set(h, ht);
       for (const [hash, height] of want) {
         if (this.closed) break;
+        if (this.receivedHashes.has(hash)) continue; // already pulled this session — never re-pull, even if the store write failed
         if (await this.store.has(height, hash)) continue;
         const bytes = await this.requestBlock(hash, height);
         if (bytes) { this.synced++; this._emit(); }
