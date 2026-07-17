@@ -92,6 +92,7 @@
   .stat .v { font-size: 1.5rem; font-weight: 600; margin-top: .15rem; font-variant-numeric: tabular-nums; }
   .stat .v.good { color: #46d585; }
   .stat .v.warn { color: var(--warn); }
+  .stat .v small { display: block; font-size: .62rem; color: var(--muted); font-weight: 400; letter-spacing: .01em; }
 
   .section-label { font-size: .74rem; text-transform: uppercase; letter-spacing: .09em;
     color: var(--muted); margin: 0 0 2.6rem; }
@@ -268,6 +269,7 @@
   <div class="stats" id="stats">
     <div class="stat"><div class="k">chain tip</div><div class="v" id="s-tip">—</div></div>
     <div class="stat"><div class="k">blocks validated</div><div class="v" id="s-valid">0 / 12</div></div>
+    <div class="stat" title="block headers this browser has verified itself (PoW, linkage, difficulty) — grows from the feed and from peers, never pruned"><div class="k">headers verified</div><div class="v" id="s-hdrs">—</div></div>
     <div class="stat"><div class="k">outputs over 80/83 B</div><div class="v" id="s-over">—</div></div>
     <div class="stat"><div class="k">OP_NET outputs</div><div class="v" id="s-opnet">—</div></div>
     <div class="stat"><div class="k">Alkanes outputs</div><div class="v" id="s-alk">—</div></div>
@@ -767,12 +769,18 @@ function refreshSummary() {
   writeStatsSnapshot();
 }
 
+function refreshHeaderStat() {
+  const s = headerChain.stats();
+  if (s) $('s-hdrs').innerHTML = `${fmt(s.count)} <small>#${fmt(s.start)}–#${fmt(s.tip)}</small>`;
+}
 function refreshAge() {
   for (const rec of blocks.values()) if (rec.when && rec.header) rec.when.textContent = ago(rec.header.time);
+  refreshHeaderStat();
   if (!lastEventAt) return;
   $('s-age').textContent = ago(lastEventAt);
 }
 setInterval(refreshAge, 5000);
+refreshHeaderStat();
 
 // ---- detail ----
 function selectBlock(hash) {
