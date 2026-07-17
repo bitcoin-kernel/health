@@ -1,6 +1,8 @@
 // webrtc-mesh.js — proven, app-agnostic WebRTC mesh over JSS content-addressed
-// signaling. Extracted from the play-grounds/webrtc lab, where every layer was
-// verified across Brave, Firefox and mobile (host/srflx/prflx paths, ~1ms RTT).
+// signaling. Born in the play-grounds/webrtc lab (verified across Brave,
+// Firefox and mobile — host/srflx/prflx paths, ~1ms RTT), hardened here.
+// THIS FILE IS THE CANONICAL COPY: the lab vendors it verbatim — after
+// changing it, copy it back to play-grounds/webrtc/webrtc-mesh.js.
 //
 // The contract: symmetric handshake — every peer batches offers AND answers
 // every offer it receives — with candidates baked into the SDP (non-trickle,
