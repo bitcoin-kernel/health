@@ -320,6 +320,10 @@ try { CFG = JSON.parse(localStorage.getItem('blockhealth.config') || '{}'); } ca
 const PUBKEY = (typeof CFG.publisher === 'string' && /^[0-9a-f]{64}$/.test(CFG.publisher)) ? CFG.publisher : DEFAULT_PUBKEY;
 const RELAYS = (Array.isArray(CFG.relays) && CFG.relays.length) ? CFG.relays.filter((r) => /^wss?:\/\//.test(r)) : DEFAULT_RELAYS;
 const CACHE_ENABLED = CFG.cache !== false; // opt-out; blocks are cached in OPFS by default
+// Rolling cache budget (pruned-node model): oldest blocks are evicted beyond
+// this. 2 GB default ≈ a week of chain; 550 MB floor (Core's own -prune minimum).
+const CACHE_BUDGET = (Number.isFinite(Number(CFG.cacheMB)) && Number(CFG.cacheMB) >= 550 ? Number(CFG.cacheMB) : 2048) * 1e6;
+if (CACHE_ENABLED && navigator.storage?.persist) navigator.storage.persist().catch(() => {}); // ask not to be evicted under storage pressure
 const PEERING_ENABLED = !!(CFG.webrtc && CFG.webrtc.signalUrl && opfsAvailable()); // WebRTC block peering
 const KIND = 33333;
 const NETWORK = 'btc';          // NIP-333 d-tag
@@ -420,7 +424,7 @@ const idleWorkers = [];
 const jobQueue = [];
 for (let i = 0; i < NUM_WORKERS; i++) {
   const w = new Worker('./validator-worker.js', { type: 'module' });
-  w.postMessage({ type: 'init', network: 'btc:mainnet', cache: CACHE_ENABLED, peer: PEERING_ENABLED });
+  w.postMessage({ type: 'init', network: 'btc:mainnet', cache: CACHE_ENABLED, budget: CACHE_BUDGET, peer: PEERING_ENABLED });
   w.onmessage = async (ev) => {
     const m = ev.data;
     if (m.type === 'ready') { idleWorkers.push(w); pump(); return; }
@@ -795,7 +799,7 @@ if (PEERING_ENABLED) {
   peerSource = new PeerSource({
     signalUrl: CFG.webrtc.signalUrl, room: CFG.webrtc.room || 'b17c0100b10c48ea1710',
     iceServers: iceServersFrom(CFG.webrtc),
-    store: new BlockStore(),
+    store: new BlockStore(), cacheBudget: CACHE_BUDGET,
     onStatus: (s) => {
       try { localStorage.setItem('blockhealth.peers', JSON.stringify({ ts: Date.now(), ...s })); } catch {}
       const el = $('peerind');

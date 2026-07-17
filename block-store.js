@@ -99,6 +99,22 @@ export class BlockStore {
 
   async findByHash(hash) { return (await this.list()).find((b) => b.hash === hash) || null; }
 
+  // Rolling-window eviction (the pruned-node model): delete oldest-height
+  // blocks until the store fits maxBytes. Safe under concurrency — deleting a
+  // file another context is mid-reading just yields that reader a cache miss,
+  // which every caller already handles by refetching.
+  async prune(maxBytes) {
+    const l = await this.list(); // ascending by height
+    const total = l.reduce((s, b) => s + b.size, 0);
+    let deleted = 0, freed = 0;
+    for (const b of l) {
+      if (total - freed <= maxBytes) break;
+      await this.delete(b.height, b.hash);
+      deleted++; freed += b.size;
+    }
+    return { deleted, freed };
+  }
+
   async clear() {
     try { const root = await navigator.storage.getDirectory(); await root.removeEntry(this.dir, { recursive: true }); }
     catch { /* nothing to clear */ }

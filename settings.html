@@ -178,9 +178,11 @@
       <div class="sw" id="cache-sw"></div>
       <div style="flex:1">
         <div class="t-name">Cache blocks locally</div>
-        <div class="t-desc">Persist validated blocks in your browser (OPFS) so they aren't re-fetched from a block API. Applies when the Blocks page reloads.</div>
+        <div class="t-desc">Persist validated blocks in your browser (OPFS) so they aren't re-fetched from a block API. Runs as a pruned node: oldest blocks are evicted beyond the budget below. Applies when the Blocks page reloads.</div>
         <div class="cache-stats" id="cache-stats">—</div>
         <div id="storage" style="margin-top:.55rem"></div>
+        <label for="budget">Cache size budget <span style="opacity:.7">(MB — min 550, default 2048)</span></label>
+        <input type="text" id="budget" spellcheck="false" autocomplete="off" placeholder="2048" style="max-width:180px">
         <div class="row" style="margin-top:.6rem"><button id="clear-cache">Clear cache</button></div>
       </div>
     </div>
@@ -371,6 +373,7 @@ $('save-open').addEventListener('click', () => { if (save()) location.href = './
 $('reset').addEventListener('click', () => {
   localStorage.removeItem('blockhealth.config');
   loadConfig();
+  loadBudget();
   renderCacheToggle();
   flashSaved();
 });
@@ -392,8 +395,24 @@ function toggleCache() {
   renderCacheToggle();
   flashSaved();
 }
-$('cache-toggle').addEventListener('click', (e) => { if (e.target.id !== 'clear-cache') toggleCache(); });
-$('cache-toggle').addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleCache(); } });
+$('cache-toggle').addEventListener('click', (e) => { if (!e.target.closest('input,button,label')) toggleCache(); });
+$('cache-toggle').addEventListener('keydown', (e) => {
+  if (e.target.closest('input,button')) return; // typing in the budget field must not flip the switch
+  if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleCache(); }
+});
+
+// ---- cache budget (rolling pruned window) ----
+const budgetMB = () => { const v = Number(readCfg().cacheMB); return Number.isFinite(v) && v >= 550 ? v : 2048; };
+function loadBudget() { $('budget').value = readCfg().cacheMB || ''; }
+$('budget').addEventListener('change', async () => {
+  const cfg = readCfg();
+  const v = Math.round(Number($('budget').value));
+  if (Number.isFinite(v) && v >= 550 && v !== 2048) cfg.cacheMB = v; else delete cfg.cacheMB;
+  writeCfg(cfg);
+  loadBudget();
+  flashSaved();
+  if (store) { try { await store.prune(budgetMB() * 1e6); } catch {} await renderCacheStats(); renderStorage(); }
+});
 $('clear-cache').addEventListener('click', async (e) => {
   e.stopPropagation();
   try { localStorage.removeItem('blockhealth.results'); localStorage.removeItem('blockhealth.classified'); } catch {} // result cache + all-time ledger
@@ -426,7 +445,7 @@ async function renderCacheStats() {
     const s = await store.stats();
     $('x-cached').textContent = fmt(s.count);
     el.innerHTML = s.count
-      ? `<b>${fmt(s.count)}</b> blocks · <b>${mb(s.bytes)}</b> MB cached · heights <b>#${fmt(s.minHeight)}</b>–<b>#${fmt(s.maxHeight)}</b>`
+      ? `<b>${fmt(s.count)}</b> blocks · <b>${mb(s.bytes)}</b> MB of <b>${fmt(budgetMB())}</b> MB budget · heights <b>#${fmt(s.minHeight)}</b>–<b>#${fmt(s.maxHeight)}</b>`
       : 'Empty — validated blocks are cached here as you browse.';
   } catch { el.textContent = 'Cache unavailable.'; $('x-cached').textContent = '—'; }
 }
@@ -473,6 +492,7 @@ function ensurePeering() {
     if (peerSource) peerSource.close();
     peerSource = new PeerSource({
       signalUrl: cfg.signalUrl, room: cfg.room || 'b17c0100b10c48ea1710', store,
+      cacheBudget: budgetMB() * 1e6,
       iceServers: iceServersFrom(cfg),
       onStatus: (s) => { liveStatus = s; try { localStorage.setItem('blockhealth.peers', JSON.stringify({ ts: Date.now(), ...s })); } catch {} renderPeerStatus(); },
     });
@@ -509,6 +529,7 @@ window.addEventListener('storage', (e) => {
 });
 setInterval(() => { renderStats(); renderCacheStats(); renderAllTime(); renderStorage(); renderPeerStatus(); }, 5000);
 loadConfig();
+loadBudget();
 loadPeerConfig();
 renderCacheToggle();
 renderStats();

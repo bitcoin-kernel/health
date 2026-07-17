@@ -7,7 +7,16 @@ import { Codec } from './engine/codec/codec.js';
 import { BlockEngine } from './engine/codec/blocks.js';
 import { BlockStore, opfsAvailable } from './block-store.js';
 
-let codec = null, be = null, store = null, peeringEnabled = false;
+let codec = null, be = null, store = null, peeringEnabled = false, cacheBudget = 0;
+
+// Debounced rolling-window eviction after writes — keeps the OPFS cache under
+// the configured byte budget by deleting oldest heights (the pruned-node model).
+let pruneTimer = null;
+function schedulePrune() {
+  if (!store || !cacheBudget) return;
+  clearTimeout(pruneTimer);
+  pruneTimer = setTimeout(() => { store.prune(cacheBudget).catch(() => {}); }, 3000);
+}
 
 const jl = async (n) => (await fetch(`./engine/schema/${n}.jsonld`)).json();
 
@@ -267,7 +276,9 @@ self.onmessage = async (ev) => {
   try {
     if (msg.type === 'init') {
       peeringEnabled = !!msg.peer;
+      cacheBudget = msg.budget || 0;
       await init(msg.network || 'btc:mainnet', msg.cache);
+      schedulePrune(); // enforce a budget that may have shrunk since last session
       self.postMessage({ type: 'ready' });
       return;
     }
@@ -294,7 +305,7 @@ self.onmessage = async (ev) => {
       if (!bytes) {
         bytes = await fetchRawBytes(hash);
         source = 'net';
-        if (store) { try { await store.put(height, hash, bytes); } catch { /* quota / disabled */ } }
+        if (store) { try { await store.put(height, hash, bytes); schedulePrune(); } catch { /* quota / disabled */ } }
       }
       let hex = bytesToHex(bytes);
       let block = codec.decode('Block', hex);
@@ -307,7 +318,7 @@ self.onmessage = async (ev) => {
         if (store) { try { await store.delete(height, hash); } catch {} }
         bytes = await fetchRawBytes(hash);
         source = 'net';
-        if (store) { try { await store.put(height, hash, bytes); } catch {} }
+        if (store) { try { await store.put(height, hash, bytes); schedulePrune(); } catch {} }
         hex = bytesToHex(bytes);
         block = codec.decode('Block', hex);
         struct = be.validateBlockStructure(block);

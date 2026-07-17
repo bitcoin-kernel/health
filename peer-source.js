@@ -28,8 +28,10 @@ export function iceServersFrom(cfg) {
 }
 
 export class PeerSource {
-  constructor({ signalUrl, room = 'b17c0100b10c48ea1710', store, iceServers, onStatus = () => {}, onBlock = () => {} }) {
+  constructor({ signalUrl, room = 'b17c0100b10c48ea1710', store, cacheBudget = 0, iceServers, onStatus = () => {}, onBlock = () => {} }) {
     this.store = store;
+    this.cacheBudget = cacheBudget; // rolling byte budget; 0 = unlimited
+    this.pruneTimer = null;
     this.onStatus = onStatus;
     this.onBlock = onBlock; // (hash, height) when a block's bytes arrive from a peer
     this.state = new Map();   // peerId -> { have:Map, inbound, inboundReq }
@@ -49,8 +51,13 @@ export class PeerSource {
   start() { if (!this.core.url) return; this.core.start(); this.haveTimer = setInterval(() => this._broadcastHave(), 15000); }
   close() {
     this.closed = true;
-    clearInterval(this.haveTimer); clearTimeout(this.syncTimer);
+    clearInterval(this.haveTimer); clearTimeout(this.syncTimer); clearTimeout(this.pruneTimer);
     this.core.stop(); this.state.clear();
+  }
+  _schedulePrune() {
+    if (!this.store || !this.cacheBudget) return;
+    clearTimeout(this.pruneTimer);
+    this.pruneTimer = setTimeout(() => { this.store.prune(this.cacheBudget).catch(() => {}); }, 3000);
   }
   status() {
     const c = this.core.status();
@@ -133,7 +140,7 @@ export class PeerSource {
     const bytes = new Uint8Array(inb.received);
     let off = 0; for (const c of inb.chunks) { bytes.set(c, off); off += c.length; }
     if (bytes.length < 80 || blockHashOf(bytes) !== req.hash) { req.resolve(null); return; } // liar / corrupt → reject
-    if (this.store && req.height != null) this.store.put(req.height, req.hash, bytes).catch((e) => {
+    if (this.store && req.height != null) this.store.put(req.height, req.hash, bytes).then(() => this._schedulePrune()).catch((e) => {
       if (!this._putWarned) { this._putWarned = true; console.warn('[peer-source] block store write failed — catch-up will not re-pull this session', e); }
     });
     this.receivedHashes.add(req.hash); // provenance: this block came from a peer
@@ -169,8 +176,15 @@ export class PeerSource {
     try {
       const want = new Map();
       for (const s of this.state.values()) for (const [h, ht] of s.have) if (!want.has(h)) want.set(h, ht);
+      // pruning floor: once the store is at budget, a block older than the
+      // oldest kept height would be evicted the moment it lands — skip it
+      let floor = -1;
+      if (this.cacheBudget) {
+        try { const s = await this.store.stats(); if (s.bytes >= this.cacheBudget && s.minHeight != null) floor = s.minHeight; } catch {}
+      }
       for (const [hash, height] of want) {
         if (this.closed) break;
+        if (height < floor) continue;
         if (this.receivedHashes.has(hash)) continue; // already pulled this session — never re-pull, even if the store write failed
         if (await this.store.has(height, hash)) continue;
         const bytes = await this.requestBlock(hash, height);
