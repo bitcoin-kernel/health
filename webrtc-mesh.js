@@ -110,8 +110,14 @@ export class MeshCore {
   }
   async _announce() {
     if (!this.ws || this.ws.readyState !== 1) return;
+    // a fresh peer floods `batch` offers so several newcomers can each take one;
+    // once the mesh has live peers, one standing offer per re-announce still
+    // heals partitions and wins races without spinning up `batch` fresh
+    // RTCPeerConnections every cycle (they'd just be reaped 60s later —
+    // steady background churn, battery/CPU on mobile)
+    const n = this.peers.size ? 1 : this.batch;
     const offers = [];
-    for (let i = 0; i < this.batch; i++) {
+    for (let i = 0; i < n; i++) {
       try {
         const { pc, sdp } = await this._makeOffer();
         const offer_id = rid();
