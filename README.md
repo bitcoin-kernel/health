@@ -51,3 +51,9 @@ python3 -m http.server 8899   # then open http://localhost:8899/
 ```
 
 A server (not `file://`) is needed because the page loads ES modules and a module worker.
+
+## License
+
+AGPL-3.0-or-later. Copyright © 2026 Melvin Carvalho. See [LICENSE](LICENSE).
+
+Includes vendored code from [bitcoin-kernel](https://github.com/bitcoin-kernel/kernel), also AGPL-3.0.
